@@ -1,0 +1,27 @@
+diff --git a/MMM-STStatus.js b/MMM-STStatus.js
+index 0000000..0000000 100644
+--- a/MMM-STStatus.js
++++ b/MMM-STStatus.js
+@@
+ 	defaults: {
+ 		token: "",
+ 		devices: [],
+ 		rooms: [],
+ 		pollInterval: 60000,
++		broadcastDeviceData: false,
++		broadcastNotification: "STSTATUS_DEVICE_DATA",
+ 		showLastUpdated: true,
+@@
+       case "DEVICE_DATA":
+         this.loading = false;
+         this.error = null;
+         this.deviceData = this.filterDevices(payload.devices || []);
+         this.lastUpdate = payload.timestamp || new Date().toISOString();
++        if (this.config.broadcastDeviceData && this.config.broadcastNotification) {
++          this.sendNotification(this.config.broadcastNotification, {
++            devices: this.deviceData,
++            timestamp: this.lastUpdate
++          });
++        }
+         this.updateDom();
+         break;

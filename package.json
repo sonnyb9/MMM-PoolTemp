@@ -1,0 +1,18 @@
+{
+  "name": "mmm-pooltemp",
+  "version": "0.1.0",
+  "description": "Lightweight MagicMirror pool temperature prediction module using existing local forecast data.",
+  "main": "MMM-PoolTemp.js",
+  "scripts": {
+    "check": "node --check MMM-PoolTemp.js"
+  },
+  "keywords": [
+    "magicmirror",
+    "magicmirror-module",
+    "pool",
+    "temperature",
+    "forecast"
+  ],
+  "license": "MIT"
+}
+

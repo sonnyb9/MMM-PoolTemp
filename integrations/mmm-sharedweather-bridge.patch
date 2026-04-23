@@ -1,0 +1,37 @@
+diff --git a/MMM-SharedWeather.js b/MMM-SharedWeather.js
+index 0000000..0000000 100644
+--- a/MMM-SharedWeather.js
++++ b/MMM-SharedWeather.js
+@@
+ 	defaults: {
++		broadcastNotifications: [],
+ 		weatherProvider: "openweathermap",
+@@
+ 	handleWeatherData (payload) {
+ 		const { type, data } = payload;
+ 		if (!data) {
+ 			return;
+ 		}
++
++		this.broadcastWeatherData(payload);
+@@
+ 	},
++
++	broadcastWeatherData (payload) {
++		if (!Array.isArray(this.config.broadcastNotifications) || this.config.broadcastNotifications.length === 0) {
++			return;
++		}
++
++		for (const notification of this.config.broadcastNotifications) {
++			this.sendNotification(notification, {
++				module: "MMM-SharedWeather",
++				instanceId: this.instanceId,
++				locationName: this.fetchedLocationName,
++				type: payload.type,
++				data: payload.data
++			});
++		}
++	},
+ 
+ 	createWeatherObject (data) {
+

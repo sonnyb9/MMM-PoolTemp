@@ -1,0 +1,93 @@
+.mmm-pooltemp {
+  max-width: 520px;
+}
+
+.mmm-pooltemp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 8%), rgb(255 255 255 / 3%));
+}
+
+.mmm-pooltemp-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.mmm-pooltemp-label {
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.mmm-pooltemp-now {
+  font-size: 1.8em;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.mmm-pooltemp-source {
+  font-size: 0.72em;
+  opacity: 0.7;
+}
+
+.mmm-pooltemp-days {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mmm-pooltemp-day {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 6%);
+}
+
+.mmm-pooltemp-day-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.85em;
+}
+
+.mmm-pooltemp-day-label {
+  font-weight: 600;
+}
+
+.mmm-pooltemp-day-trend {
+  opacity: 0.75;
+  text-transform: capitalize;
+}
+
+.mmm-pooltemp-range {
+  margin-top: 6px;
+  font-size: 1.15em;
+  font-weight: 600;
+}
+
+.mmm-pooltemp-range-low {
+  opacity: 0.78;
+}
+
+.mmm-pooltemp-meta {
+  margin-top: 4px;
+  font-size: 0.75em;
+  opacity: 0.72;
+}
+
+.mmm-pooltemp-warm {
+  color: #ffb3b3;
+}
+
+.mmm-pooltemp-cool {
+  color: #9ed0ff;
+}
+
+.mmm-pooltemp-hidden {
+  display: none;
+}
+
