@@ -10,6 +10,7 @@ Module.register("MMM-PoolTemp", {
 		weatherLocationName: "Lutz",
 		temperatureSource: "manual",
 		manualWaterTempF: 74.6,
+		manualAmbientAirTempF: null,
 		manualObservedLowF: 74.6,
 		manualObservedHighF: 76.9,
 		smartthingsDeviceId: null,
@@ -37,7 +38,8 @@ Module.register("MMM-PoolTemp", {
 			solarGainBase: 0.055,
 			overnightLossBase: 0.05,
 			rainPenaltyMax: 0.6,
-			dayChangeClampF: 3.0
+			dayChangeClampF: 3.0,
+			localAmbientCarryForward: 0.18
 		}
 	},
 
@@ -48,6 +50,7 @@ Module.register("MMM-PoolTemp", {
 		this.lastWeatherAt = null;
 		this.lastCalendarDigest = "";
 		this.sensorWaterTempF = null;
+		this.sensorAmbientAirTempF = null;
 		this.activeWaterTempF = this.config.manualWaterTempF;
 	},
 
@@ -109,7 +112,15 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		this.sensorWaterTempF = nextTemp;
-		if (this.config.temperatureSource === "smartthings") {
+		this.sensorAmbientAirTempF = this.numberOrNull(
+			device.ambientTemperature,
+			device.airTemperature,
+			device.capabilities && device.capabilities.ambientTemperature,
+			device.capabilities && device.capabilities.airTemperature,
+			device.capabilities && device.capabilities.outdoorTemperature
+		);
+
+		if (this.config.temperatureSource === "smartthings" || this.sensorAmbientAirTempF !== null) {
 			this.recalculate();
 		}
 	},
@@ -164,20 +175,33 @@ Module.register("MMM-PoolTemp", {
 		return Math.max(1.0, highF - lowF);
 	},
 
+	resolveAmbientAirTempF (currentWeather) {
+		return this.numberOrNull(
+			this.sensorAmbientAirTempF,
+			this.config.manualAmbientAirTempF,
+			currentWeather && currentWeather.temperature
+		);
+	},
+
 	predictDay ({ previousMeanF, forecast, recentRangeF, dayIndex, currentWeather }) {
 		const minAirF = this.numberOrNull(forecast.minTemperature, forecast.temperature, previousMeanF);
 		const maxAirF = this.numberOrNull(forecast.maxTemperature, minAirF, previousMeanF);
 		const meanAirF = (minAirF + maxAirF) / 2;
 		const precipProbability = this.numberOrNull(forecast.precipitationProbability, 0);
 		const weatherType = String(forecast.weatherType || "");
-		const currentAirF = this.numberOrNull(currentWeather && currentWeather.temperature);
+		const weatherCurrentAirF = this.numberOrNull(currentWeather && currentWeather.temperature);
+		const localCurrentAirF = this.resolveAmbientAirTempF(currentWeather);
+		const currentAirF = this.numberOrNull(localCurrentAirF, weatherCurrentAirF);
+		const sunFactor = this.getSunFactor(weatherType, precipProbability);
+		const exposureFactor = this.getExposureFactor();
+		const shellFactor = this.getShellFactor();
 
 		const airTermF = (meanAirF - previousMeanF) * this.config.model.airCoupling;
 		const solarTermF = Math.max(0, maxAirF - 74) *
 			this.config.model.solarGainBase *
-			this.getSunFactor(weatherType, precipProbability) *
-			this.getExposureFactor() *
-			this.getShellFactor();
+			sunFactor *
+			exposureFactor *
+			shellFactor;
 		const overnightTermF = Math.max(0, 72 - minAirF) *
 			this.config.model.overnightLossBase *
 			this.getOvernightLossFactor();
@@ -187,12 +211,12 @@ Module.register("MMM-PoolTemp", {
 		const rawDayChangeF = airTermF + solarTermF - overnightTermF - rainTermF;
 		const dayChangeF = this.clamp(rawDayChangeF, -this.config.model.dayChangeClampF, this.config.model.dayChangeClampF);
 
-		const meanF = previousMeanF + dayChangeF;
+		let meanF = previousMeanF + dayChangeF;
 		const airSwingF = Math.max(0, maxAirF - minAirF);
 		const swingF = this.clamp(
 			(recentRangeF * 0.55) +
 			(Math.max(0, airSwingF - 8) * 0.05) +
-			(this.getSunFactor(weatherType, precipProbability) * 0.35) -
+			(sunFactor * 0.35) -
 			((precipProbability / 100) * 0.25),
 			1.2,
 			3.4
@@ -205,16 +229,30 @@ Module.register("MMM-PoolTemp", {
 			const now = new Date();
 			const hour = now.getHours() + (now.getMinutes() / 60);
 			const sunWindowFactor = hour < 12 ? 1.0 : (hour < 15 ? 0.8 : (hour < 18 ? 0.45 : 0.15));
+			const observedRetentionFactor = hour < 12 ? 0.28 : (hour < 15 ? 0.52 : (hour < 18 ? 0.78 : 0.58));
+			const localAirBiasF = Math.max(0, currentAirF - this.numberOrNull(weatherCurrentAirF, currentAirF));
+			const effectiveMaxAirF = Math.max(maxAirF, currentAirF);
 			const baselineAirF = Math.max(
 				this.activeWaterTempF,
 				this.numberOrNull(currentAirF, minAirF, this.activeWaterTempF)
 			);
-			const intradayWarmupF = Math.max(0, maxAirF - baselineAirF) *
+			const intradayWarmupF = Math.max(0, effectiveMaxAirF - baselineAirF) *
 				0.28 *
-				this.getSunFactor(weatherType, precipProbability) *
-				this.getExposureFactor() *
-				this.getShellFactor() *
+				sunFactor *
+				exposureFactor *
+				shellFactor *
 				sunWindowFactor;
+			const observedLiftF = Math.max(0, this.activeWaterTempF - meanF);
+			const retainedHeatF = intradayWarmupF * observedRetentionFactor;
+			const localAmbientCarryF = localAirBiasF *
+				this.config.model.localAmbientCarryForward *
+				sunFactor *
+				exposureFactor;
+
+			meanF = Math.max(
+				meanF + (observedLiftF * observedRetentionFactor) + localAmbientCarryF,
+				this.activeWaterTempF + retainedHeatF
+			);
 
 			lowF = Math.min(lowF, this.activeWaterTempF);
 			highF = Math.max(
@@ -230,10 +268,11 @@ Module.register("MMM-PoolTemp", {
 			meanF,
 			lowF,
 			highF,
-			trend: dayChangeF > 0.25 ? "warming" : (dayChangeF < -0.25 ? "cooling" : "steady"),
+			trend: (meanF - previousMeanF) > 0.25 ? "warming" : ((meanF - previousMeanF) < -0.25 ? "cooling" : "steady"),
 			poolTempF: Math.round(meanF),
 			poolRangeLowF: Math.round(lowF),
 			poolRangeHighF: Math.round(highF),
+			poolRangeHighDisplayF: dayIndex === 0 ? Math.max(highF, this.activeWaterTempF) : Math.round(highF),
 			maxAirF: Math.round(maxAirF),
 			minAirF: Math.round(minAirF),
 			precipProbability: Math.round(precipProbability),
@@ -369,7 +408,7 @@ Module.register("MMM-PoolTemp", {
 
 		const summaryNow = document.createElement("div");
 		summaryNow.className = `mmm-pooltemp-now ${this.activeWaterTempF >= 80 ? "mmm-pooltemp-warm" : "mmm-pooltemp-cool"}`;
-		summaryNow.textContent = `${Math.round(this.activeWaterTempF || this.config.manualWaterTempF)}\u00b0`;
+		summaryNow.textContent = `${this.formatTemperature(this.activeWaterTempF || this.config.manualWaterTempF, 1)}\u00b0`;
 		summaryLeft.appendChild(summaryNow);
 
 		const summarySource = document.createElement("div");
@@ -412,7 +451,10 @@ Module.register("MMM-PoolTemp", {
 
 			const range = document.createElement("div");
 			range.className = "mmm-pooltemp-range";
-			range.innerHTML = `<span class="mmm-pooltemp-range-high ${prediction.poolRangeHighF >= 80 ? "mmm-pooltemp-warm" : "mmm-pooltemp-cool"}">${prediction.poolRangeHighF}\u00b0</span> / <span class="mmm-pooltemp-range-low">${prediction.poolRangeLowF}\u00b0</span>`;
+			const highDisplay = prediction.label === this.config.labels.today
+				? this.formatTemperature(prediction.poolRangeHighDisplayF, 1)
+				: this.formatTemperature(prediction.poolRangeHighDisplayF, 0);
+			range.innerHTML = `<span class="mmm-pooltemp-range-high ${prediction.poolRangeHighDisplayF >= 80 ? "mmm-pooltemp-warm" : "mmm-pooltemp-cool"}">${highDisplay}\u00b0</span> / <span class="mmm-pooltemp-range-low">${prediction.poolRangeLowF}\u00b0</span>`;
 			day.appendChild(range);
 
 			const meta = document.createElement("div");
@@ -460,6 +502,15 @@ Module.register("MMM-PoolTemp", {
 
 	clamp (value, min, max) {
 		return Math.min(max, Math.max(min, value));
+	},
+
+	formatTemperature (value, decimals = 0) {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) {
+			return "--";
+		}
+
+		return parsed.toFixed(decimals);
 	},
 
 	numberOrNull (...values) {

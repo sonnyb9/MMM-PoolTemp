@@ -9,6 +9,7 @@
 - Weather source comes from the existing local Lutz forecast already displayed in MagicMirror
 - No additional weather API queries
 - Manual water temperature anchor in config
+- Optional local ambient air anchor in config or sensor payload
 - TV instance shows a compact 2-day card below `MMM-STStatus`
 - Server instance is calendar-only on page 2 and feeds predictions into `MMM-CalendarExt3`
 - Predictor is lightweight and heuristic, not a heavy physical simulation
@@ -30,8 +31,9 @@
   - No heater
   - No screen enclosure
 - Initial calibration snapshot used for development:
-  - Current water temp: 74.6 F
-  - Last 24h range: 76.9 F to 74.6 F
+  - Current water temp: 79.3 F
+  - Local ambient air near pool: 86.6 F
+  - Last 24h range: 79.3 F to 74.6 F
 
 ## Why the architecture looks like this
 
@@ -44,6 +46,8 @@ The module is intentionally frontend-only for v1.
 
 `MMM-SharedWeather` already deduplicates upstream weather requests, but it does not directly expose its cached data to sibling modules. Because of that, this repo includes a small bridge patch so `MMM-SharedWeather` can emit local MagicMirror notifications carrying the already-fetched payload.
 
+The predictor now also supports a hotter local-air input when the pool microclimate runs warmer than the general weather feed. That can come from `manualAmbientAirTempF` in config or from a future sensor payload.
+
 ## Future SmartThings path
 
 The user asked whether Samsung API polling is already continuous. The answer was yes: `MMM-STStatus` currently polls while MagicMirror is running. Because of that, the preferred future sensor design is to reuse that existing polling path instead of adding new pool-specific Samsung API calls.
@@ -54,6 +58,7 @@ Recommended future shape:
 - `MMM-PoolTemp` subscribes to that notification
 - Pool config switches from `temperatureSource: "manual"` to `temperatureSource: "smartthings"`
 - Selection should be by SmartThings device id, not label
+- Ambient air should be passed through too when the device payload includes it
 - `.cache.json` should be treated as an optional startup fallback, not the primary integration surface
 
 ## If returning later
@@ -70,8 +75,8 @@ Check these first:
 ## Likely next improvements
 
 - Swap manual anchor for SmartThings sensor anchor
+- Promote local ambient air from manual config to sensor-fed ambient input
 - Add optional stale-sensor fallback logic
 - Add explicit calibration knobs if the heuristic consistently overshoots or undershoots
 - Optionally persist the most recent computed prediction locally if startup latency becomes annoying
 - Add unit tests for the predictor if the model grows beyond the current simple heuristic
-

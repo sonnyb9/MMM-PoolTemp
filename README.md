@@ -33,6 +33,7 @@ This repo includes example patch files for the bridge pieces:
 The predictor is intentionally simple. It uses:
 
 - Current measured water temperature as the anchor
+- Optional local ambient air temperature near the pool when available
 - Recent observed water-temperature range to size the daily swing
 - Forecast air min/max
 - Forecast precipitation probability
@@ -56,6 +57,8 @@ There are no runtime dependencies.
 
 Use `displayMode: "card"` on the TV instance.
 
+If you have a local ambient reading near the pool, include it. That helps the day-0 and next-day model run warmer when the pool microclimate is hotter than the general weather feed.
+
 ```js
 {
   module: "MMM-PoolTemp",
@@ -66,9 +69,10 @@ Use `displayMode: "card"` on the TV instance.
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
     temperatureSource: "manual",
-    manualWaterTempF: 74.6,
+    manualWaterTempF: 79.3,
+    manualAmbientAirTempF: 86.6,
     manualObservedLowF: 74.6,
-    manualObservedHighF: 76.9
+    manualObservedHighF: 79.3
   }
 }
 ```
@@ -87,12 +91,23 @@ Use `displayMode: "calendar"` so the module does not render a visible card and o
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
     temperatureSource: "manual",
-    manualWaterTempF: 74.6,
+    manualWaterTempF: 79.3,
+    manualAmbientAirTempF: 86.6,
     manualObservedLowF: 74.6,
-    manualObservedHighF: 76.9
+    manualObservedHighF: 79.3
   }
 }
 ```
+
+## Local Ambient Air Input
+
+If you have a thermometer near the pool that also reports ambient air, set:
+
+```js
+manualAmbientAirTempF: 86.6,
+```
+
+The module will prefer that local ambient reading for same-day heating when it is available, and it will carry a smaller portion of that warm local bias into the next day. If you omit it, the module falls back to the weather feed's current air temperature.
 
 ## Recommended CalendarExt3 styling hook
 
@@ -187,6 +202,7 @@ Recommended future approach:
 - Add a lightweight frontend broadcast from `MMM-STStatus`
 - Let `MMM-PoolTemp` subscribe to `STSTATUS_DEVICE_DATA`
 - Set `temperatureSource: "smartthings"` and `smartthingsDeviceId`
+- Optionally pass through local ambient temperature too if the device provides it
 
 That reuses existing SmartThings polling instead of adding more API traffic.
 
@@ -197,4 +213,3 @@ Syntax check:
 ```bash
 npm run check
 ```
-

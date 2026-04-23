@@ -7,9 +7,9 @@
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
     temperatureSource: "manual",
-    manualWaterTempF: 74.6,
+    manualWaterTempF: 79.3,
+    manualAmbientAirTempF: 86.6,
     manualObservedLowF: 74.6,
-    manualObservedHighF: 76.9
+    manualObservedHighF: 79.3
   }
 }
-

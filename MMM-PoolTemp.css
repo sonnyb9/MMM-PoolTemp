@@ -15,9 +15,18 @@
 
 .mmm-pooltemp-summary {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 12px;
+  text-align: center;
+}
+
+.mmm-pooltemp-summary > div:first-child {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 
 .mmm-pooltemp-label {
