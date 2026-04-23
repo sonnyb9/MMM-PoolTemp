@@ -132,7 +132,8 @@ Module.register("MMM-PoolTemp", {
 				previousMeanF: rollingMeanF,
 				forecast,
 				recentRangeF,
-				dayIndex: index
+				dayIndex: index,
+				currentWeather: this.currentWeather
 			});
 
 			predictions.push(prediction);
@@ -163,12 +164,13 @@ Module.register("MMM-PoolTemp", {
 		return Math.max(1.0, highF - lowF);
 	},
 
-	predictDay ({ previousMeanF, forecast, recentRangeF, dayIndex }) {
+	predictDay ({ previousMeanF, forecast, recentRangeF, dayIndex, currentWeather }) {
 		const minAirF = this.numberOrNull(forecast.minTemperature, forecast.temperature, previousMeanF);
 		const maxAirF = this.numberOrNull(forecast.maxTemperature, minAirF, previousMeanF);
 		const meanAirF = (minAirF + maxAirF) / 2;
 		const precipProbability = this.numberOrNull(forecast.precipitationProbability, 0);
 		const weatherType = String(forecast.weatherType || "");
+		const currentAirF = this.numberOrNull(currentWeather && currentWeather.temperature);
 
 		const airTermF = (meanAirF - previousMeanF) * this.config.model.airCoupling;
 		const solarTermF = Math.max(0, maxAirF - 74) *
@@ -200,8 +202,26 @@ Module.register("MMM-PoolTemp", {
 		let highF = meanF + (swingF / 2);
 
 		if (dayIndex === 0) {
+			const now = new Date();
+			const hour = now.getHours() + (now.getMinutes() / 60);
+			const sunWindowFactor = hour < 12 ? 1.0 : (hour < 15 ? 0.8 : (hour < 18 ? 0.45 : 0.15));
+			const baselineAirF = Math.max(
+				this.activeWaterTempF,
+				this.numberOrNull(currentAirF, minAirF, this.activeWaterTempF)
+			);
+			const intradayWarmupF = Math.max(0, maxAirF - baselineAirF) *
+				0.28 *
+				this.getSunFactor(weatherType, precipProbability) *
+				this.getExposureFactor() *
+				this.getShellFactor() *
+				sunWindowFactor;
+
 			lowF = Math.min(lowF, this.activeWaterTempF);
-			highF = Math.max(highF, this.activeWaterTempF);
+			highF = Math.max(
+				highF,
+				this.activeWaterTempF,
+				this.activeWaterTempF + intradayWarmupF
+			);
 		}
 
 		return {

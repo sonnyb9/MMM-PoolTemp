@@ -1,5 +1,6 @@
 .mmm-pooltemp {
   max-width: 520px;
+  font-family: "Roboto Condensed", Arial, sans-serif;
 }
 
 .mmm-pooltemp-card {
@@ -20,8 +21,10 @@
 }
 
 .mmm-pooltemp-label {
-  font-size: 0.9em;
+  font-size: 18px;
   opacity: 0.8;
+  line-height: 1.1;
+  font-weight: 400;
 }
 
 .mmm-pooltemp-now {
@@ -51,11 +54,12 @@
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 0.85em;
+  font-size: 18px;
+  line-height: 1.1;
 }
 
 .mmm-pooltemp-day-label {
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .mmm-pooltemp-day-trend {
@@ -75,7 +79,7 @@
 
 .mmm-pooltemp-meta {
   margin-top: 4px;
-  font-size: 0.75em;
+  font-size: 14px;
   opacity: 0.72;
 }
 
@@ -90,4 +94,3 @@
 .mmm-pooltemp-hidden {
   display: none;
 }
-
