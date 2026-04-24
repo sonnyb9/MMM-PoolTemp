@@ -34,12 +34,12 @@ Module.register("MMM-PoolTemp", {
 			heated: false
 		},
 		model: {
-			airCoupling: 0.18,
-			solarGainBase: 0.055,
-			overnightLossBase: 0.05,
-			rainPenaltyMax: 0.6,
+			airCoupling: 0.15,
+			solarGainBase: 0.09,
+			overnightLossBase: 0.026,
+			rainPenaltyMax: 0.35,
 			dayChangeClampF: 3.0,
-			localAmbientCarryForward: 0.18
+			localAmbientCarryForward: 0.28
 		}
 	},
 
@@ -197,12 +197,12 @@ Module.register("MMM-PoolTemp", {
 		const shellFactor = this.getShellFactor();
 
 		const airTermF = (meanAirF - previousMeanF) * this.config.model.airCoupling;
-		const solarTermF = Math.max(0, maxAirF - 74) *
+		const solarTermF = Math.max(0, maxAirF - 70) *
 			this.config.model.solarGainBase *
 			sunFactor *
 			exposureFactor *
 			shellFactor;
-		const overnightTermF = Math.max(0, 72 - minAirF) *
+		const overnightTermF = Math.max(0, 68 - minAirF) *
 			this.config.model.overnightLossBase *
 			this.getOvernightLossFactor();
 		const rainTermF = (precipProbability / 100) *
@@ -228,8 +228,8 @@ Module.register("MMM-PoolTemp", {
 		if (dayIndex === 0) {
 			const now = new Date();
 			const hour = now.getHours() + (now.getMinutes() / 60);
-			const sunWindowFactor = hour < 12 ? 1.0 : (hour < 15 ? 0.8 : (hour < 18 ? 0.45 : 0.15));
-			const observedRetentionFactor = hour < 12 ? 0.28 : (hour < 15 ? 0.52 : (hour < 18 ? 0.78 : 0.58));
+			const sunWindowFactor = hour < 12 ? 1.0 : (hour < 15 ? 0.85 : (hour < 18 ? 0.55 : 0.2));
+			const observedRetentionFactor = hour < 12 ? 0.4 : (hour < 15 ? 0.64 : (hour < 18 ? 0.86 : 0.7));
 			const localAirBiasF = Math.max(0, currentAirF - this.numberOrNull(weatherCurrentAirF, currentAirF));
 			const effectiveMaxAirF = Math.max(maxAirF, currentAirF);
 			const baselineAirF = Math.max(
@@ -237,7 +237,7 @@ Module.register("MMM-PoolTemp", {
 				this.numberOrNull(currentAirF, minAirF, this.activeWaterTempF)
 			);
 			const intradayWarmupF = Math.max(0, effectiveMaxAirF - baselineAirF) *
-				0.28 *
+				0.38 *
 				sunFactor *
 				exposureFactor *
 				shellFactor *
@@ -282,29 +282,29 @@ Module.register("MMM-PoolTemp", {
 
 	getSunFactor (weatherType, precipProbability) {
 		const normalized = weatherType.toLowerCase();
-		let factor = 0.95;
+		let factor = 1.0;
 
 		if (normalized.includes("clear") || normalized.includes("sunny")) {
-			factor = 1.05;
+			factor = 1.15;
 		} else if (normalized.includes("partly")) {
-			factor = 0.95;
+			factor = 1.03;
 		} else if (normalized.includes("cloud")) {
-			factor = 0.75;
+			factor = 0.84;
 		} else if (normalized.includes("fog") || normalized.includes("rain") || normalized.includes("snow") || normalized.includes("sleet") || normalized.includes("thunder")) {
-			factor = 0.5;
+			factor = 0.62;
 		}
 
-		factor -= (precipProbability / 100) * 0.25;
-		return this.clamp(factor, 0.2, 1.05);
+		factor -= (precipProbability / 100) * 0.16;
+		return this.clamp(factor, 0.35, 1.15);
 	},
 
 	getExposureFactor () {
 		if (this.config.pool.sunExposure === "partial") {
-			return 0.78;
+			return 0.86;
 		}
 
 		if (this.config.pool.sunExposure === "low") {
-			return 0.58;
+			return 0.68;
 		}
 
 		return 1.0;
@@ -317,21 +317,21 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		if (color.includes("white")) {
-			return 0.9;
+			return 0.98;
 		}
 
-		return 0.97;
+		return 1.0;
 	},
 
 	getOvernightLossFactor () {
 		let factor = 1.0;
 
 		if (!this.config.pool.screenEnclosed) {
-			factor += 0.08;
+			factor += 0.04;
 		}
 
 		if (!this.config.pool.covered) {
-			factor += 0.12;
+			factor += 0.06;
 		}
 
 		return factor;
@@ -457,10 +457,6 @@ Module.register("MMM-PoolTemp", {
 			range.innerHTML = `<span class="mmm-pooltemp-range-high ${prediction.poolRangeHighDisplayF >= 80 ? "mmm-pooltemp-warm" : "mmm-pooltemp-cool"}">${highDisplay}\u00b0</span> / <span class="mmm-pooltemp-range-low">${prediction.poolRangeLowF}\u00b0</span>`;
 			day.appendChild(range);
 
-			const meta = document.createElement("div");
-			meta.className = "mmm-pooltemp-meta";
-			meta.textContent = `Air ${prediction.maxAirF}\u00b0 / ${prediction.minAirF}\u00b0`;
-			day.appendChild(meta);
 		}
 
 		return wrapper;
