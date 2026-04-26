@@ -11,8 +11,8 @@ The current intended deployment is:
 
 - No direct weather API traffic
 - No new Samsung API traffic
-- Manual water-temp calibration now
-- Clean future upgrade path for a SmartThings or Zigbee temperature sensor later
+- Manual water-temp calibration fallback
+- Live SmartThings pool-temperature support
 - One prediction engine with two presentation modes
 
 ## Current architecture
@@ -20,7 +20,7 @@ The current intended deployment is:
 The module expects an in-browser weather notification payload from a local bridge, then computes pool predictions client-side.
 
 - Weather input: `POOLTEMP_WEATHER_DATA`
-- Future sensor input: `STSTATUS_DEVICE_DATA`
+- Optional sensor input: `STSTATUS_DEVICE_DATA`
 - Calendar output: synthetic `CALENDAR_EVENTS`
 
 This repo includes example patch files for the bridge pieces:
@@ -123,7 +123,7 @@ Example:
   classes: "MonthView p__2",
   config: {
     instanceId: "month1",
-    calendarSet: ["iCloud", "US Holidays", "Rays"],
+    calendarSet: ["iCloud", "US Holidays", "Rays", "Pool Temp"],
     weeksInView: 4,
     eventTransformer: (event) => {
       if (event.calendarName === "Pool Temp" && typeof event.poolTempF === "number") {
@@ -140,15 +140,15 @@ Example:
         return;
       }
 
-      const body = cellDom.querySelector(".cellBody");
-      if (!body) {
+      const footer = cellDom.querySelector(".cellFooter");
+      if (!footer) {
         return;
       }
 
       const row = document.createElement("div");
       row.className = "pooltemp-inline";
       row.innerHTML = poolEvent.poolTempHtml;
-      body.appendChild(row);
+      footer.appendChild(row);
     }
   }
 }
@@ -158,12 +158,13 @@ Add matching CSS in `config/custom.css` if you want that month-view line to look
 
 ```css
 .MMM-CalendarExt3 .pooltemp-inline {
-  margin: 2px 4px 0;
+  margin: 0 4px 2px;
   font-size: 0.72em;
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: #fff;
 }
 
 .MMM-CalendarExt3 .pooltemp-inline .mmm-pooltemp-warm {
@@ -174,6 +175,8 @@ Add matching CSS in `config/custom.css` if you want that month-view line to look
   color: #9ed0ff;
 }
 ```
+
+Important: `Pool Temp` must be included in `calendarSet` or CalendarExt3 will filter the synthetic events out before `eventTransformer` and `manipulateDateCell` can see them.
 
 ## Required SharedWeather bridge
 
@@ -192,19 +195,48 @@ config: {
 
 You only need the Lutz instances to broadcast for this module.
 
-## Future SmartThings sensor path
+## SmartThings sensor input
 
-This repo is intentionally ready for a future SmartThings-backed pool sensor, but it does not require one today.
+`MMM-PoolTemp` supports SmartThings-backed water temperature now. The recommended approach is:
 
-Recommended future approach:
+- Keep `MMM-STStatus` as the SmartThings poller
+- Enable its frontend rebroadcast with `broadcastDeviceData: true`
+- Hide the pool sensor from the visible SmartThings table with `hiddenDevices` if you do not want an extra row
+- Point `MMM-PoolTemp` at that device with `temperatureSource: "smartthings"` and `smartthingsDeviceId`
 
-- Keep `MMM-STStatus` as the Samsung API poller
-- Add a lightweight frontend broadcast from `MMM-STStatus`
-- Let `MMM-PoolTemp` subscribe to `STSTATUS_DEVICE_DATA`
-- Set `temperatureSource: "smartthings"` and `smartthingsDeviceId`
-- Optionally pass through local ambient temperature too if the device provides it
+Example:
 
-That reuses existing SmartThings polling instead of adding more API traffic.
+```js
+{
+  module: "MMM-STStatus",
+  position: "middle_center",
+  config: {
+    devices: [
+      { id: "pool-sensor-uuid", name: "Pool Sensor" }
+    ],
+    hiddenDevices: ["pool-sensor-uuid"],
+    broadcastDeviceData: true,
+    broadcastNotification: "STSTATUS_DEVICE_DATA"
+  }
+},
+{
+  module: "MMM-PoolTemp",
+  position: "middle_center",
+  classes: "tv__1 half-width",
+  config: {
+    displayMode: "card",
+    weatherNotification: "POOLTEMP_WEATHER_DATA",
+    weatherLocationName: "Lutz",
+    temperatureSource: "smartthings",
+    smartthingsDeviceId: "pool-sensor-uuid",
+    manualWaterTempF: 79.3,
+    manualObservedLowF: 74.6,
+    manualObservedHighF: 79.3
+  }
+}
+```
+
+The manual values remain useful as fallback calibration, but the live SmartThings sensor becomes the active temperature anchor when present.
 
 ## Scripts
 

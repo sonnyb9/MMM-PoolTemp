@@ -353,21 +353,24 @@ Module.register("MMM-PoolTemp", {
 		const events = this.predictions.slice(0, this.config.calendarDays).map((prediction) => {
 			const startDate = this.getLocalMidnight(prediction.date);
 			const endDate = new Date(startDate.getTime() + (24 * 60 * 60 * 1000));
-			const isWarm = prediction.poolTempF >= 80;
+			const displayPoolTempF = prediction.label === this.config.labels.today
+				? Math.round(this.activeWaterTempF)
+				: prediction.poolTempF;
+			const isWarm = displayPoolTempF >= 80;
 
 			return {
-				title: `Pool Temp: ${prediction.poolTempF}\u00b0`,
+				title: `Pool Temp: ${displayPoolTempF}\u00b0`,
 				fullDayEvent: true,
 				startDate: startDate.valueOf(),
 				endDate: endDate.valueOf(),
 				calendarName: "Pool Temp",
 				class: `pooltemp-forecast ${isWarm ? "pooltemp-warm" : "pooltemp-cool"}`,
 				color: isWarm ? "#ffb3b3" : "#9ed0ff",
-				description: `Pool Temp: ${prediction.poolTempF}\u00b0`,
+				description: `Pool Temp: ${displayPoolTempF}\u00b0`,
 				location: "",
 				symbol: [],
-				poolTempF: prediction.poolTempF,
-				poolTempHtml: `Pool Temp: <span class="${isWarm ? "mmm-pooltemp-warm" : "mmm-pooltemp-cool"}">${prediction.poolTempF}\u00b0</span>`,
+				poolTempF: displayPoolTempF,
+				poolTempHtml: `Pool Temp: <span class="${isWarm ? "mmm-pooltemp-warm" : "mmm-pooltemp-cool"}">${displayPoolTempF}\u00b0</span>`,
 				skip: false
 			};
 		});
