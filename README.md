@@ -238,6 +238,18 @@ Example:
 
 The manual values remain useful as fallback calibration, but the live SmartThings sensor becomes the active temperature anchor when present.
 
+When SmartThings temperature timestamps are available through `MMM-STStatus`, `MMM-PoolTemp` also uses recent sensor history to slightly bias short-range predictions toward the observed warming or cooling trend. If that sensor reading goes stale, the module falls back to `manualWaterTempF` instead of continuing to anchor the forecast on old data.
+
+The relevant model knobs are:
+
+- `sensorTrendHours`
+- `sensorTrendMinSpanMinutes`
+- `sensorStaleHours`
+- `trendInfluenceDay0`
+- `trendInfluenceDay1`
+- `trendInfluenceLater`
+- `maxTrendBiasF`
+
 ## Scripts
 
 Syntax check:
