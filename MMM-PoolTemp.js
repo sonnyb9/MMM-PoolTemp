@@ -535,7 +535,6 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		this.lastPersistDigest = digest;
-		Log.info(`[MMM-PoolTemp] Sending POOL_MODEL_RUN for ${predictions.length} predictions`);
 		this.sendSocketNotification("POOL_MODEL_RUN", payload);
 	},
 

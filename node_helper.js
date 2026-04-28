@@ -6,16 +6,11 @@ const PYTHON_BIN = "python3";
 const LOGGER_SCRIPT = "/home/pi/.openclaw/scripts/log_pool_model_run.py";
 
 module.exports = NodeHelper.create({
-	start () {
-		Log.info("[MMM-PoolTemp] Node helper started");
-	},
-
 	socketNotificationReceived (notification, payload) {
 		if (notification !== "POOL_MODEL_RUN" || !payload || typeof payload !== "object") {
 			return;
 		}
 
-		Log.info("[MMM-PoolTemp] Received POOL_MODEL_RUN payload");
 		this.persistModelRun(payload);
 	},
 
