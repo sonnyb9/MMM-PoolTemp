@@ -61,6 +61,7 @@ Module.register("MMM-PoolTemp", {
 		this.sensorLastUpdatedAt = null;
 		this.sensorHistory = [];
 		this.activeWaterTempF = this.config.manualWaterTempF;
+		this.lastPersistDigest = "";
 	},
 
 	getStyles () {
@@ -172,6 +173,12 @@ Module.register("MMM-PoolTemp", {
 
 		this.activeWaterTempF = baseWaterTempF;
 		this.predictions = predictions;
+		this.persistModelRun({
+			baseWaterTempF,
+			recentRangeF,
+			sensorTrend,
+			predictions
+		});
 		this.broadcastCalendarEvents();
 		this.updateDom(300);
 	},
@@ -477,6 +484,138 @@ Module.register("MMM-PoolTemp", {
 		return factor;
 	},
 
+	persistModelRun ({ baseWaterTempF, recentRangeF, sensorTrend, predictions }) {
+		if (!Array.isArray(predictions) || predictions.length === 0) {
+			return;
+		}
+
+		const capturedAt = new Date().toISOString();
+		const waterTempSource = this.resolveWaterTempSource();
+		const payload = {
+			capturedAt,
+			modelVersion: "pooltemp-2026-04-28-phase4",
+			displayMode: this.config.displayMode,
+			weatherLocationName: this.config.weatherLocationName,
+			waterTempSource,
+			anchorWaterTempF: this.roundNumber(baseWaterTempF, 3),
+			activeWaterTempF: this.roundNumber(this.activeWaterTempF, 3),
+			sensorStale: this.isSensorReadingStale(),
+			sensorTimestamp: this.sensorLastUpdatedAt instanceof Date ? this.sensorLastUpdatedAt.toISOString() : null,
+			sensorTrendHours: this.roundNumber(sensorTrend && sensorTrend.hours, 3),
+			trendPerHourF: this.roundNumber(sensorTrend && sensorTrend.perHourF, 4),
+			trendDeltaF: this.roundNumber(sensorTrend && sensorTrend.deltaF, 3),
+			recentRangeF: this.roundNumber(recentRangeF, 3),
+			manualObservedLowF: this.numberOrNull(this.config.manualObservedLowF),
+			manualObservedHighF: this.numberOrNull(this.config.manualObservedHighF),
+			modelParams: { ...this.config.model },
+			poolProfile: {
+				...this.config.pool
+			},
+			currentWeather: this.summarizeCurrentWeather(),
+			forecastDigest: this.summarizeForecastDigest(),
+			inputDigest: this.buildInputDigest(baseWaterTempF, recentRangeF, sensorTrend, predictions),
+			notes: this.buildModelRunNotes(waterTempSource, sensorTrend),
+			predictions: predictions.map((prediction) => ({
+				date: prediction.date,
+				label: prediction.label,
+				trend: prediction.trend,
+				meanF: this.roundNumber(prediction.meanF, 4),
+				lowF: this.roundNumber(prediction.lowF, 4),
+				highF: this.roundNumber(prediction.highF, 4),
+				maxAirF: prediction.maxAirF,
+				minAirF: prediction.minAirF,
+				precipProbability: prediction.precipProbability,
+				weatherType: prediction.weatherType
+			}))
+		};
+
+		const digest = JSON.stringify(payload.inputDigest);
+		if (digest === this.lastPersistDigest) {
+			return;
+		}
+
+		this.lastPersistDigest = digest;
+		this.sendSocketNotification("POOL_MODEL_RUN", payload);
+	},
+
+	resolveWaterTempSource () {
+		if (this.config.temperatureSource !== "smartthings") {
+			return "manual";
+		}
+
+		if (this.sensorWaterTempF === null) {
+			return "manual-fallback-no-sensor";
+		}
+
+		return this.isSensorReadingStale() ? "manual-fallback-stale-sensor" : "smartthings";
+	},
+
+	summarizeCurrentWeather () {
+		if (!this.currentWeather || typeof this.currentWeather !== "object") {
+			return {};
+		}
+
+		return {
+			temperature: this.roundNumber(this.currentWeather.temperature, 3),
+			minTemperature: this.roundNumber(this.currentWeather.minTemperature, 3),
+			maxTemperature: this.roundNumber(this.currentWeather.maxTemperature, 3),
+			precipitationProbability: this.roundNumber(this.currentWeather.precipitationProbability, 3),
+			weatherType: String(this.currentWeather.weatherType || "")
+		};
+	},
+
+	summarizeForecastDigest () {
+		return this.forecastArray.slice(0, this.config.calendarDays).map((forecast) => ({
+			date: forecast && forecast.date ? String(forecast.date).slice(0, 10) : null,
+			minTemperature: this.roundNumber(forecast && forecast.minTemperature, 3),
+			maxTemperature: this.roundNumber(forecast && forecast.maxTemperature, 3),
+			precipitationProbability: this.roundNumber(forecast && forecast.precipitationProbability, 3),
+			weatherType: forecast ? String(forecast.weatherType || "") : ""
+		}));
+	},
+
+	buildInputDigest (baseWaterTempF, recentRangeF, sensorTrend, predictions) {
+		return {
+			weatherLocationName: this.config.weatherLocationName,
+			displayMode: this.config.displayMode,
+			waterTempSource: this.resolveWaterTempSource(),
+			anchorWaterTempF: this.roundNumber(baseWaterTempF, 3),
+			recentRangeF: this.roundNumber(recentRangeF, 3),
+			sensorTimestamp: this.sensorLastUpdatedAt instanceof Date ? this.sensorLastUpdatedAt.toISOString() : null,
+			sensorTrendPerHourF: this.roundNumber(sensorTrend && sensorTrend.perHourF, 4),
+			sensorTrendHours: this.roundNumber(sensorTrend && sensorTrend.hours, 3),
+			currentWeather: this.summarizeCurrentWeather(),
+			forecastDigest: this.summarizeForecastDigest(),
+			modelParams: { ...this.config.model },
+			predictionDigest: predictions.map((prediction) => ({
+				date: prediction.date,
+				meanF: this.roundNumber(prediction.meanF, 4),
+				lowF: this.roundNumber(prediction.lowF, 4),
+				highF: this.roundNumber(prediction.highF, 4)
+			}))
+		};
+	},
+
+	buildModelRunNotes (waterTempSource, sensorTrend) {
+		if (waterTempSource === "manual-fallback-stale-sensor") {
+			return "sensor stale, manual fallback";
+		}
+
+		if (waterTempSource === "manual-fallback-no-sensor") {
+			return "smartthings requested but no sensor reading available";
+		}
+
+		if (sensorTrend && Number.isFinite(sensorTrend.perHourF) && sensorTrend.perHourF > 0.05) {
+			return "warming trend bias applied";
+		}
+
+		if (sensorTrend && Number.isFinite(sensorTrend.perHourF) && sensorTrend.perHourF < -0.05) {
+			return "cooling trend bias applied";
+		}
+
+		return "";
+	},
+
 	broadcastCalendarEvents () {
 		if (!this.usesCalendarMode()) {
 			return;
@@ -650,6 +789,15 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		return parsed.toFixed(decimals);
+	},
+
+	roundNumber (value, decimals = 0) {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) {
+			return null;
+		}
+
+		return Number(parsed.toFixed(decimals));
 	},
 
 	numberOrNull (...values) {

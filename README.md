@@ -1,6 +1,6 @@
 # MMM-PoolTemp
 
-`MMM-PoolTemp` is a lightweight MagicMirror module that predicts pool temperature from forecast data you already have locally. It does not call a weather API, does not need a `node_helper`, and is designed to work with a shared-forecast setup so it does not make your rate-limit situation worse.
+`MMM-PoolTemp` is a lightweight MagicMirror module that predicts pool temperature from forecast data you already have locally. It does not call a weather API and is designed to work with a shared-forecast setup so it does not make your rate-limit situation worse.
 
 The current intended deployment is:
 
@@ -17,11 +17,28 @@ The current intended deployment is:
 
 ## Current architecture
 
-The module expects an in-browser weather notification payload from a local bridge, then computes pool predictions client-side.
+The module expects an in-browser weather notification payload from a local bridge, computes pool predictions client-side, and can optionally persist model-run snapshots through its node helper.
 
 - Weather input: `POOLTEMP_WEATHER_DATA`
 - Optional sensor input: `STSTATUS_DEVICE_DATA`
 - Calendar output: synthetic `CALENDAR_EVENTS`
+- Optional persistence output: `POOL_MODEL_RUN`
+
+## Optional durable model logging
+
+If `/home/pi/.openclaw/scripts/log_pool_model_run.py` is present, the module node helper will forward deduplicated model-run snapshots into the local pool-model SQLite database.
+
+This records:
+
+- anchor water temperature
+- sensor trend and stale state
+- forecast digest seen by the model
+- per-day predicted pool ranges
+
+The intended companion tables are:
+
+- `model_runs`
+- `model_predictions`
 
 This repo includes example patch files for the bridge pieces:
 
