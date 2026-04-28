@@ -8,6 +8,7 @@ Module.register("MMM-PoolTemp", {
 		weatherNotification: "POOLTEMP_WEATHER_DATA",
 		sensorNotification: "STSTATUS_DEVICE_DATA",
 		weatherLocationName: "Lutz",
+		weatherTemperatureUnit: "auto",
 		temperatureSource: "manual",
 		manualWaterTempF: 74.6,
 		manualAmbientAirTempF: null,
@@ -209,17 +210,27 @@ Module.register("MMM-PoolTemp", {
 		return this.numberOrNull(
 			this.sensorAmbientAirTempF,
 			this.config.manualAmbientAirTempF,
-			currentWeather && currentWeather.temperature
+			this.normalizeWeatherTemperature(currentWeather && currentWeather.temperature)
 		);
 	},
 
 	predictDay ({ previousMeanF, forecast, recentRangeF, sensorTrend, dayIndex, currentWeather }) {
-		const minAirF = this.numberOrNull(forecast.minTemperature, forecast.temperature, previousMeanF);
-		const maxAirF = this.numberOrNull(forecast.maxTemperature, minAirF, previousMeanF);
+		const minAirF = this.numberOrNull(
+			this.normalizeWeatherTemperature(forecast.minTemperature),
+			this.normalizeWeatherTemperature(forecast.temperature),
+			previousMeanF
+		);
+		const maxAirF = this.numberOrNull(
+			this.normalizeWeatherTemperature(forecast.maxTemperature),
+			minAirF,
+			previousMeanF
+		);
 		const meanAirF = (minAirF + maxAirF) / 2;
 		const precipProbability = this.numberOrNull(forecast.precipitationProbability, 0);
 		const weatherType = String(forecast.weatherType || "");
-		const weatherCurrentAirF = this.numberOrNull(currentWeather && currentWeather.temperature);
+		const weatherCurrentAirF = this.numberOrNull(
+			this.normalizeWeatherTemperature(currentWeather && currentWeather.temperature)
+		);
 		const localCurrentAirF = this.resolveAmbientAirTempF(currentWeather);
 		const currentAirF = this.numberOrNull(localCurrentAirF, weatherCurrentAirF);
 		const sunFactor = this.getSunFactor(weatherType, precipProbability);
@@ -484,6 +495,64 @@ Module.register("MMM-PoolTemp", {
 		return factor;
 	},
 
+	resolveWeatherTemperatureUnit () {
+		const configured = String(this.config.weatherTemperatureUnit || "auto").toLowerCase();
+		if (configured === "fahrenheit" || configured === "celsius") {
+			return configured;
+		}
+
+		const candidates = [];
+		if (this.currentWeather) {
+			candidates.push(
+				this.numberOrNull(this.currentWeather.temperature),
+				this.numberOrNull(this.currentWeather.minTemperature),
+				this.numberOrNull(this.currentWeather.maxTemperature)
+			);
+		}
+
+		for (const forecast of this.forecastArray.slice(0, Math.min(this.forecastArray.length, 5))) {
+			if (!forecast) {
+				continue;
+			}
+
+			candidates.push(
+				this.numberOrNull(forecast.minTemperature),
+				this.numberOrNull(forecast.maxTemperature),
+				this.numberOrNull(forecast.temperature)
+			);
+		}
+
+		const temps = candidates.filter((value) => Number.isFinite(value));
+		if (temps.length === 0) {
+			return "fahrenheit";
+		}
+
+		const maxTemp = Math.max(...temps);
+		const minTemp = Math.min(...temps);
+		const warmWaterAnchorF = this.numberOrNull(
+			this.sensorWaterTempF,
+			this.config.manualWaterTempF,
+			this.config.manualObservedHighF
+		);
+
+		if (maxTemp <= 45 && minTemp >= -30 && warmWaterAnchorF !== null && warmWaterAnchorF >= 55) {
+			return "celsius";
+		}
+
+		return "fahrenheit";
+	},
+
+	normalizeWeatherTemperature (value) {
+		const parsed = this.numberOrNull(value);
+		if (parsed === null) {
+			return null;
+		}
+
+		return this.resolveWeatherTemperatureUnit() === "celsius"
+			? ((parsed * 9) / 5) + 32
+			: parsed;
+	},
+
 	persistModelRun ({ baseWaterTempF, recentRangeF, sensorTrend, predictions }) {
 		if (!Array.isArray(predictions) || predictions.length === 0) {
 			return;
@@ -556,9 +625,9 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		return {
-			temperature: this.roundNumber(this.currentWeather.temperature, 3),
-			minTemperature: this.roundNumber(this.currentWeather.minTemperature, 3),
-			maxTemperature: this.roundNumber(this.currentWeather.maxTemperature, 3),
+			temperature: this.roundNumber(this.normalizeWeatherTemperature(this.currentWeather.temperature), 3),
+			minTemperature: this.roundNumber(this.normalizeWeatherTemperature(this.currentWeather.minTemperature), 3),
+			maxTemperature: this.roundNumber(this.normalizeWeatherTemperature(this.currentWeather.maxTemperature), 3),
 			precipitationProbability: this.roundNumber(this.currentWeather.precipitationProbability, 3),
 			weatherType: String(this.currentWeather.weatherType || "")
 		};
@@ -567,8 +636,8 @@ Module.register("MMM-PoolTemp", {
 	summarizeForecastDigest () {
 		return this.forecastArray.slice(0, this.config.calendarDays).map((forecast) => ({
 			date: forecast && forecast.date ? String(forecast.date).slice(0, 10) : null,
-			minTemperature: this.roundNumber(forecast && forecast.minTemperature, 3),
-			maxTemperature: this.roundNumber(forecast && forecast.maxTemperature, 3),
+			minTemperature: this.roundNumber(this.normalizeWeatherTemperature(forecast && forecast.minTemperature), 3),
+			maxTemperature: this.roundNumber(this.normalizeWeatherTemperature(forecast && forecast.maxTemperature), 3),
 			precipitationProbability: this.roundNumber(forecast && forecast.precipitationProbability, 3),
 			weatherType: forecast ? String(forecast.weatherType || "") : ""
 		}));
@@ -597,6 +666,10 @@ Module.register("MMM-PoolTemp", {
 	},
 
 	buildModelRunNotes (waterTempSource, sensorTrend) {
+		if (this.resolveWeatherTemperatureUnit() === "celsius") {
+			return "weather temperatures normalized from celsius to fahrenheit";
+		}
+
 		if (waterTempSource === "manual-fallback-stale-sensor") {
 			return "sensor stale, manual fallback";
 		}
