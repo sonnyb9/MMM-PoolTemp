@@ -4,8 +4,8 @@
 
 The current intended deployment is:
 
-- `MagicMirror-TV`: compact 2-day card below `MMM-STStatus`
-- `magicmirror-server` page 2: calendar-only integration inside `MMM-CalendarExt3`
+- `mm-tv`: compact 2-day card below `MMM-STStatus`
+- `mm` page 2: calendar-only integration inside `MMM-CalendarExt3`
 
 ## Design goals
 
@@ -255,17 +255,26 @@ Example:
 
 The manual values remain useful as fallback calibration, but the live SmartThings sensor becomes the active temperature anchor when present.
 
-When SmartThings temperature timestamps are available through `MMM-STStatus`, `MMM-PoolTemp` also uses recent sensor history to slightly bias short-range predictions toward the observed warming or cooling trend. If that sensor reading goes stale, the module falls back to `manualWaterTempF` instead of continuing to anchor the forecast on old data.
+When SmartThings temperature timestamps are available through `MMM-STStatus`, `MMM-PoolTemp` keeps using the last successful sensor reading after it first goes stale, then falls back to `manualWaterTempF` only after a longer grace window. The default grace window is `staleSensorFallbackHours: 48`, while the primary freshness cutoff remains `sensorStaleHours`.
+
+The model can also apply an automatic hybrid correction layer backed by the local pool-model SQLite history:
+
+- A seasonal baseline bias for the forecast month
+- A shorter rolling residual correction on top of that baseline
+
+This is bounded on purpose so the model can adapt to drift and changing seasons without becoming twitchy from a small number of recent readings.
 
 The relevant model knobs are:
 
-- `sensorTrendHours`
-- `sensorTrendMinSpanMinutes`
 - `sensorStaleHours`
-- `trendInfluenceDay0`
-- `trendInfluenceDay1`
-- `trendInfluenceLater`
-- `maxTrendBiasF`
+- `staleSensorFallbackHours`
+- `autoCorrectionEnabled`
+- `autoCorrectionLookbackDays`
+- `autoCorrectionSeasonalLookbackDays`
+- `autoCorrectionMinSamples`
+- `autoCorrectionMinSeasonalSamples`
+- `maxAutoCorrectionF`
+- `maxSeasonalCorrectionF`
 
 ## Scripts
 

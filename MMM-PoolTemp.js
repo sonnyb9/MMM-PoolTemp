@@ -35,19 +35,21 @@ Module.register("MMM-PoolTemp", {
 			heated: false
 		},
 		model: {
-			airCoupling: 0.15,
-			solarGainBase: 0.09,
-			overnightLossBase: 0.026,
-			rainPenaltyMax: 0.35,
+			airCoupling: 0.18,
+			solarGainBase: 0.055,
+			overnightLossBase: 0.05,
+			rainPenaltyMax: 0.6,
 			dayChangeClampF: 3.0,
-			localAmbientCarryForward: 0.28,
-			sensorTrendHours: 6,
-			sensorTrendMinSpanMinutes: 45,
+			localAmbientCarryForward: 0.18,
 			sensorStaleHours: 4,
-			trendInfluenceDay0: 0.55,
-			trendInfluenceDay1: 0.35,
-			trendInfluenceLater: 0.18,
-			maxTrendBiasF: 1.6
+			staleSensorFallbackHours: 48,
+			autoCorrectionEnabled: true,
+			autoCorrectionMinSamples: 2,
+			autoCorrectionLookbackDays: 7,
+			autoCorrectionSeasonalLookbackDays: 120,
+			autoCorrectionMinSeasonalSamples: 3,
+			maxAutoCorrectionF: 2.5,
+			maxSeasonalCorrectionF: 2.0,
 		}
 	},
 
@@ -60,9 +62,10 @@ Module.register("MMM-PoolTemp", {
 		this.sensorWaterTempF = null;
 		this.sensorAmbientAirTempF = null;
 		this.sensorLastUpdatedAt = null;
-		this.sensorHistory = [];
 		this.activeWaterTempF = this.config.manualWaterTempF;
 		this.lastPersistDigest = "";
+		this.modelCorrection = null;
+		this.lastCorrectionRequestAt = 0;
 	},
 
 	getStyles () {
@@ -76,6 +79,21 @@ Module.register("MMM-PoolTemp", {
 
 		if (notification === this.config.sensorNotification) {
 			this.handleSensorNotification(payload);
+		}
+	},
+
+	socketNotificationReceived (notification, payload) {
+		if (notification !== "MODEL_CORRECTION" || !payload || typeof payload !== "object") {
+			return;
+		}
+
+		if (payload.identifier && payload.identifier !== this.identifier) {
+			return;
+		}
+
+		this.modelCorrection = payload.correction || null;
+		if (this.forecastArray.length > 0) {
+			this.recalculate();
 		}
 	},
 
@@ -99,6 +117,7 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		this.lastWeatherAt = new Date();
+		this.requestModelCorrection(false);
 		this.recalculate();
 	},
 
@@ -130,7 +149,6 @@ Module.register("MMM-PoolTemp", {
 
 		this.sensorWaterTempF = nextTemp;
 		this.sensorLastUpdatedAt = sensorTimestamp;
-		this.recordSensorReading(nextTemp, sensorTimestamp);
 		this.sensorAmbientAirTempF = this.numberOrNull(
 			device.ambientTemperature,
 			device.airTemperature,
@@ -140,6 +158,7 @@ Module.register("MMM-PoolTemp", {
 		);
 
 		if (this.config.temperatureSource === "smartthings" || this.sensorAmbientAirTempF !== null) {
+			this.requestModelCorrection(false);
 			this.recalculate();
 		}
 	},
@@ -154,7 +173,6 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		const recentRangeF = this.calculateRecentRangeF();
-		const sensorTrend = this.calculateSensorTrend(baseWaterTempF);
 		let rollingMeanF = baseWaterTempF;
 		const predictions = [];
 
@@ -163,7 +181,6 @@ Module.register("MMM-PoolTemp", {
 				previousMeanF: rollingMeanF,
 				forecast,
 				recentRangeF,
-				sensorTrend,
 				dayIndex: index,
 				currentWeather: this.currentWeather
 			});
@@ -177,7 +194,7 @@ Module.register("MMM-PoolTemp", {
 		this.persistModelRun({
 			baseWaterTempF,
 			recentRangeF,
-			sensorTrend,
+			sensorTrend: null,
 			predictions
 		});
 		this.broadcastCalendarEvents();
@@ -185,12 +202,10 @@ Module.register("MMM-PoolTemp", {
 	},
 
 	resolveWaterTempF () {
-		if (
-			this.config.temperatureSource === "smartthings" &&
-			this.sensorWaterTempF !== null &&
-			!this.isSensorReadingStale()
-		) {
-			return this.sensorWaterTempF;
+		if (this.config.temperatureSource === "smartthings" && this.sensorWaterTempF !== null) {
+			if (!this.isSensorReadingStale() || this.isSensorReadingWithinFallbackWindow()) {
+				return this.sensorWaterTempF;
+			}
 		}
 
 		return this.numberOrNull(this.config.manualWaterTempF);
@@ -214,7 +229,7 @@ Module.register("MMM-PoolTemp", {
 		);
 	},
 
-	predictDay ({ previousMeanF, forecast, recentRangeF, sensorTrend, dayIndex, currentWeather }) {
+	predictDay ({ previousMeanF, forecast, recentRangeF, dayIndex, currentWeather }) {
 		const minAirF = this.numberOrNull(
 			this.normalizeWeatherTemperature(forecast.minTemperature),
 			this.normalizeWeatherTemperature(forecast.temperature),
@@ -236,22 +251,22 @@ Module.register("MMM-PoolTemp", {
 		const sunFactor = this.getSunFactor(weatherType, precipProbability);
 		const exposureFactor = this.getExposureFactor();
 		const shellFactor = this.getShellFactor();
-		const sensorTrendTermF = this.calculateTrendAdjustment(sensorTrend, dayIndex);
 
 		const airTermF = (meanAirF - previousMeanF) * this.config.model.airCoupling;
-		const solarTermF = Math.max(0, maxAirF - 70) *
+		const solarTermF = Math.max(0, maxAirF - 74) *
 			this.config.model.solarGainBase *
 			sunFactor *
 			exposureFactor *
 			shellFactor;
-		const overnightTermF = Math.max(0, 68 - minAirF) *
+		const overnightTermF = Math.max(0, 72 - minAirF) *
 			this.config.model.overnightLossBase *
 			this.getOvernightLossFactor();
 		const rainTermF = (precipProbability / 100) *
 			this.config.model.rainPenaltyMax *
 			(this.config.pool.covered ? 0.2 : 1.0);
-		const rawDayChangeF = airTermF + solarTermF - overnightTermF - rainTermF + sensorTrendTermF;
+		const rawDayChangeF = airTermF + solarTermF - overnightTermF - rainTermF;
 		const dayChangeF = this.clamp(rawDayChangeF, -this.config.model.dayChangeClampF, this.config.model.dayChangeClampF);
+		const correctionBiasF = this.resolveAdaptiveCorrectionBias(dayIndex, forecast && forecast.date);
 
 		let meanF = previousMeanF + dayChangeF;
 		const airSwingF = Math.max(0, maxAirF - minAirF);
@@ -270,8 +285,8 @@ Module.register("MMM-PoolTemp", {
 		if (dayIndex === 0) {
 			const now = new Date();
 			const hour = now.getHours() + (now.getMinutes() / 60);
-			const sunWindowFactor = hour < 12 ? 1.0 : (hour < 15 ? 0.85 : (hour < 18 ? 0.55 : 0.2));
-			const observedRetentionFactor = hour < 12 ? 0.4 : (hour < 15 ? 0.64 : (hour < 18 ? 0.86 : 0.7));
+			const sunWindowFactor = hour < 12 ? 1.0 : (hour < 15 ? 0.8 : (hour < 18 ? 0.45 : 0.15));
+			const observedRetentionFactor = hour < 12 ? 0.28 : (hour < 15 ? 0.52 : (hour < 18 ? 0.78 : 0.58));
 			const localAirBiasF = Math.max(0, currentAirF - this.numberOrNull(weatherCurrentAirF, currentAirF));
 			const effectiveMaxAirF = Math.max(maxAirF, currentAirF);
 			const baselineAirF = Math.max(
@@ -279,7 +294,7 @@ Module.register("MMM-PoolTemp", {
 				this.numberOrNull(currentAirF, minAirF, this.activeWaterTempF)
 			);
 			const intradayWarmupF = Math.max(0, effectiveMaxAirF - baselineAirF) *
-				0.38 *
+				0.28 *
 				sunFactor *
 				exposureFactor *
 				shellFactor *
@@ -304,6 +319,12 @@ Module.register("MMM-PoolTemp", {
 			);
 		}
 
+		if (dayIndex > 0 && correctionBiasF !== 0) {
+			meanF += correctionBiasF;
+			lowF += correctionBiasF;
+			highF += correctionBiasF;
+		}
+
 		return {
 			date: forecast.date,
 			label: this.formatDayLabel(forecast.date, dayIndex),
@@ -322,98 +343,6 @@ Module.register("MMM-PoolTemp", {
 		};
 	},
 
-	calculateTrendAdjustment (sensorTrend, dayIndex) {
-		if (!sensorTrend || sensorTrend.stale || sensorTrend.perHourF === 0) {
-			return 0;
-		}
-
-		const influence = dayIndex === 0
-			? this.config.model.trendInfluenceDay0
-			: (dayIndex === 1 ? this.config.model.trendInfluenceDay1 : this.config.model.trendInfluenceLater);
-		const projectedHours = dayIndex === 0 ? 6 : (dayIndex === 1 ? 12 : 18);
-		const projectedTrendF = sensorTrend.perHourF * projectedHours * influence;
-		return this.clamp(projectedTrendF, -this.config.model.maxTrendBiasF, this.config.model.maxTrendBiasF);
-	},
-
-	calculateSensorTrend (baseWaterTempF) {
-		const history = this.sensorHistory.filter((entry) => entry && Number.isFinite(entry.tempF) && entry.at instanceof Date);
-		const lastEntry = history[history.length - 1];
-		const fallback = {
-			stale: this.isSensorReadingStale(),
-			perHourF: 0,
-			deltaF: 0,
-			hours: 0,
-			currentTempF: baseWaterTempF
-		};
-
-		if (!lastEntry) {
-			return fallback;
-		}
-
-		const cutoffMs = this.config.model.sensorTrendHours * 60 * 60 * 1000;
-		const minSpanMs = this.config.model.sensorTrendMinSpanMinutes * 60 * 1000;
-		const latestMs = lastEntry.at.getTime();
-		const earliestAllowedMs = latestMs - cutoffMs;
-		let firstEntry = null;
-
-		for (const entry of history) {
-			const entryMs = entry.at.getTime();
-			if (entryMs <= latestMs - minSpanMs && entryMs >= earliestAllowedMs) {
-				firstEntry = entry;
-				break;
-			}
-		}
-
-		if (!firstEntry) {
-			return {
-				...fallback,
-				currentTempF: lastEntry.tempF
-			};
-		}
-
-		const spanHours = (latestMs - firstEntry.at.getTime()) / (60 * 60 * 1000);
-		if (spanHours <= 0) {
-			return {
-				...fallback,
-				currentTempF: lastEntry.tempF
-			};
-		}
-
-		return {
-			stale: this.isSensorReadingStale(),
-			perHourF: (lastEntry.tempF - firstEntry.tempF) / spanHours,
-			deltaF: lastEntry.tempF - firstEntry.tempF,
-			hours: spanHours,
-			currentTempF: lastEntry.tempF
-		};
-	},
-
-	recordSensorReading (tempF, timestamp) {
-		if (!Number.isFinite(tempF)) {
-			return;
-		}
-
-		const at = timestamp instanceof Date ? timestamp : new Date();
-		if (Number.isNaN(at.getTime())) {
-			return;
-		}
-
-		const nextEntry = { tempF, at };
-		const lastEntry = this.sensorHistory[this.sensorHistory.length - 1];
-
-		if (lastEntry && lastEntry.at.getTime() === at.getTime()) {
-			this.sensorHistory[this.sensorHistory.length - 1] = nextEntry;
-		} else {
-			this.sensorHistory.push(nextEntry);
-		}
-
-		const cutoffMs = at.getTime() - (24 * 60 * 60 * 1000);
-		this.sensorHistory = this.sensorHistory
-			.sort((left, right) => left.at.getTime() - right.at.getTime())
-			.filter((entry) => entry.at.getTime() >= cutoffMs)
-			.slice(-36);
-	},
-
 	isSensorReadingStale () {
 		if (!(this.sensorLastUpdatedAt instanceof Date) || Number.isNaN(this.sensorLastUpdatedAt.getTime())) {
 			return true;
@@ -421,6 +350,107 @@ Module.register("MMM-PoolTemp", {
 
 		const staleMs = this.config.model.sensorStaleHours * 60 * 60 * 1000;
 		return (Date.now() - this.sensorLastUpdatedAt.getTime()) > staleMs;
+	},
+
+	isSensorReadingWithinFallbackWindow () {
+		if (!(this.sensorLastUpdatedAt instanceof Date) || Number.isNaN(this.sensorLastUpdatedAt.getTime())) {
+			return false;
+		}
+
+		const fallbackHours = this.numberOrNull(this.config.model.staleSensorFallbackHours);
+		if (fallbackHours === null || fallbackHours <= 0) {
+			return false;
+		}
+
+		const fallbackMs = fallbackHours * 60 * 60 * 1000;
+		return (Date.now() - this.sensorLastUpdatedAt.getTime()) <= fallbackMs;
+	},
+
+	requestModelCorrection (force = false) {
+		if (!this.config.model.autoCorrectionEnabled) {
+			return;
+		}
+
+		const now = Date.now();
+		const refreshMs = 10 * 60 * 1000;
+		if (!force && (now - this.lastCorrectionRequestAt) < refreshMs) {
+			return;
+		}
+
+		this.lastCorrectionRequestAt = now;
+		this.sendSocketNotification("REQUEST_MODEL_CORRECTION", {
+			identifier: this.identifier,
+			modelVersion: "pooltemp-2026-05-03-phase6-hybrid",
+			lookbackDays: this.numberOrNull(this.config.model.autoCorrectionLookbackDays, 7),
+			seasonalLookbackDays: this.numberOrNull(this.config.model.autoCorrectionSeasonalLookbackDays, 120)
+		});
+	},
+
+	resolveAdaptiveCorrectionBias (dayIndex, forecastDate) {
+		if (!this.config.model.autoCorrectionEnabled || dayIndex <= 0 || !this.modelCorrection) {
+			return 0;
+		}
+
+		const horizonKey = String(dayIndex);
+		const minSamples = this.numberOrNull(this.config.model.autoCorrectionMinSamples, 2);
+		const minSeasonalSamples = this.numberOrNull(this.config.model.autoCorrectionMinSeasonalSamples, 3);
+		const maxRollingF = this.numberOrNull(this.config.model.maxAutoCorrectionF, 2.5);
+		const maxSeasonalF = this.numberOrNull(this.config.model.maxSeasonalCorrectionF, 2.0);
+		const seasonalEntry = this.resolveSeasonalCorrectionEntry(horizonKey, forecastDate);
+		const rollingEntry = this.resolveRollingCorrectionEntry(horizonKey);
+
+		let seasonalBiasF = 0;
+		if (seasonalEntry && Number(seasonalEntry.sampleCount) >= minSeasonalSamples) {
+			seasonalBiasF = this.clamp(this.numberOrNull(seasonalEntry.biasF, 0), -maxSeasonalF, maxSeasonalF);
+		}
+
+		let rollingResidualF = 0;
+		if (rollingEntry && Number(rollingEntry.sampleCount) >= minSamples) {
+			const rollingBiasF = this.numberOrNull(rollingEntry.biasF, 0);
+			rollingResidualF = this.clamp(rollingBiasF - seasonalBiasF, -maxRollingF, maxRollingF);
+		}
+
+		const biasF = seasonalBiasF + rollingResidualF;
+		return this.roundNumber(biasF, 3) || 0;
+	},
+
+	resolveRollingCorrectionEntry (horizonKey) {
+		if (!this.modelCorrection || !this.modelCorrection.rolling) {
+			return null;
+		}
+
+		return (this.modelCorrection.rolling.byHorizon && this.modelCorrection.rolling.byHorizon[horizonKey]) ||
+			this.modelCorrection.rolling.general ||
+			null;
+	},
+
+	resolveSeasonalCorrectionEntry (horizonKey, forecastDate) {
+		if (!this.modelCorrection || !this.modelCorrection.seasonalByMonth) {
+			return null;
+		}
+
+		const monthKey = this.extractMonthKey(forecastDate);
+		const monthEntry = this.modelCorrection.seasonalByMonth[monthKey];
+		if (!monthEntry) {
+			return null;
+		}
+
+		return (monthEntry.byHorizon && monthEntry.byHorizon[horizonKey]) ||
+			monthEntry.general ||
+			null;
+	},
+
+	extractMonthKey (forecastDate) {
+		if (typeof forecastDate === "string" && forecastDate.length >= 7) {
+			return forecastDate.slice(5, 7);
+		}
+
+		const date = forecastDate ? new Date(forecastDate) : new Date();
+		if (Number.isNaN(date.getTime())) {
+			return String(new Date().getMonth() + 1).padStart(2, "0");
+		}
+
+		return String(date.getMonth() + 1).padStart(2, "0");
 	},
 
 	parseTimestamp (...values) {
@@ -443,26 +473,26 @@ Module.register("MMM-PoolTemp", {
 		let factor = 1.0;
 
 		if (normalized.includes("clear") || normalized.includes("sunny")) {
-			factor = 1.15;
+			factor = 1.05;
 		} else if (normalized.includes("partly")) {
-			factor = 1.03;
+			factor = 0.95;
 		} else if (normalized.includes("cloud")) {
-			factor = 0.84;
+			factor = 0.75;
 		} else if (normalized.includes("fog") || normalized.includes("rain") || normalized.includes("snow") || normalized.includes("sleet") || normalized.includes("thunder")) {
-			factor = 0.62;
+			factor = 0.5;
 		}
 
-		factor -= (precipProbability / 100) * 0.16;
-		return this.clamp(factor, 0.35, 1.15);
+		factor -= (precipProbability / 100) * 0.25;
+		return this.clamp(factor, 0.2, 1.05);
 	},
 
 	getExposureFactor () {
 		if (this.config.pool.sunExposure === "partial") {
-			return 0.86;
+			return 0.78;
 		}
 
 		if (this.config.pool.sunExposure === "low") {
-			return 0.68;
+			return 0.58;
 		}
 
 		return 1.0;
@@ -475,21 +505,21 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		if (color.includes("white")) {
-			return 0.98;
+			return 0.9;
 		}
 
-		return 1.0;
+		return 0.97;
 	},
 
 	getOvernightLossFactor () {
 		let factor = 1.0;
 
 		if (!this.config.pool.screenEnclosed) {
-			factor += 0.04;
+			factor += 0.08;
 		}
 
 		if (!this.config.pool.covered) {
-			factor += 0.06;
+			factor += 0.12;
 		}
 
 		return factor;
@@ -562,7 +592,7 @@ Module.register("MMM-PoolTemp", {
 		const waterTempSource = this.resolveWaterTempSource();
 		const payload = {
 			capturedAt,
-			modelVersion: "pooltemp-2026-04-28-phase4",
+			modelVersion: "pooltemp-2026-05-03-phase6-hybrid",
 			displayMode: this.config.displayMode,
 			weatherLocationName: this.config.weatherLocationName,
 			waterTempSource,
@@ -576,6 +606,7 @@ Module.register("MMM-PoolTemp", {
 			recentRangeF: this.roundNumber(recentRangeF, 3),
 			manualObservedLowF: this.numberOrNull(this.config.manualObservedLowF),
 			manualObservedHighF: this.numberOrNull(this.config.manualObservedHighF),
+			adaptiveCorrection: this.summarizeAdaptiveCorrection(),
 			modelParams: { ...this.config.model },
 			poolProfile: {
 				...this.config.pool
@@ -616,7 +647,13 @@ Module.register("MMM-PoolTemp", {
 			return "manual-fallback-no-sensor";
 		}
 
-		return this.isSensorReadingStale() ? "manual-fallback-stale-sensor" : "smartthings";
+		if (!this.isSensorReadingStale()) {
+			return "smartthings";
+		}
+
+		return this.isSensorReadingWithinFallbackWindow()
+			? "smartthings-stale-hold"
+			: "manual-fallback-stale-sensor";
 	},
 
 	summarizeCurrentWeather () {
@@ -643,6 +680,20 @@ Module.register("MMM-PoolTemp", {
 		}));
 	},
 
+	summarizeAdaptiveCorrection () {
+		if (!this.modelCorrection || !this.config.model.autoCorrectionEnabled) {
+			return {};
+		}
+
+		const monthKey = this.extractMonthKey(new Date());
+		const seasonal = this.modelCorrection.seasonalByMonth && this.modelCorrection.seasonalByMonth[monthKey];
+		return {
+			rolling: this.modelCorrection.rolling || {},
+			seasonalMonth: monthKey,
+			seasonal: seasonal || {}
+		};
+	},
+
 	buildInputDigest (baseWaterTempF, recentRangeF, sensorTrend, predictions) {
 		return {
 			weatherLocationName: this.config.weatherLocationName,
@@ -650,6 +701,7 @@ Module.register("MMM-PoolTemp", {
 			waterTempSource: this.resolveWaterTempSource(),
 			anchorWaterTempF: this.roundNumber(baseWaterTempF, 3),
 			recentRangeF: this.roundNumber(recentRangeF, 3),
+			adaptiveCorrection: this.summarizeAdaptiveCorrection(),
 			sensorTimestamp: this.sensorLastUpdatedAt instanceof Date ? this.sensorLastUpdatedAt.toISOString() : null,
 			sensorTrendPerHourF: this.roundNumber(sensorTrend && sensorTrend.perHourF, 4),
 			sensorTrendHours: this.roundNumber(sensorTrend && sensorTrend.hours, 3),
@@ -666,16 +718,33 @@ Module.register("MMM-PoolTemp", {
 	},
 
 	buildModelRunNotes (waterTempSource, sensorTrend) {
-		if (this.resolveWeatherTemperatureUnit() === "celsius") {
-			return "weather temperatures normalized from celsius to fahrenheit";
+		const correctionSummary = this.describeAdaptiveCorrection();
+		const normalizedWeatherNote = this.resolveWeatherTemperatureUnit() === "celsius"
+			? "weather temperatures normalized from celsius to fahrenheit"
+			: "";
+
+		if (normalizedWeatherNote && correctionSummary) {
+			return `${normalizedWeatherNote}; ${correctionSummary}`;
+		}
+
+		if (normalizedWeatherNote) {
+			return normalizedWeatherNote;
+		}
+
+		if (waterTempSource === "smartthings-stale-hold") {
+			return "sensor stale, holding last successful sensor reading";
 		}
 
 		if (waterTempSource === "manual-fallback-stale-sensor") {
-			return "sensor stale, manual fallback";
+			return "sensor stale beyond fallback window, manual fallback";
 		}
 
 		if (waterTempSource === "manual-fallback-no-sensor") {
 			return "smartthings requested but no sensor reading available";
+		}
+
+		if (correctionSummary) {
+			return correctionSummary;
 		}
 
 		if (sensorTrend && Number.isFinite(sensorTrend.perHourF) && sensorTrend.perHourF > 0.05) {
@@ -687,6 +756,37 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		return "";
+	},
+
+	describeAdaptiveCorrection () {
+		if (!this.config.model.autoCorrectionEnabled || !this.modelCorrection) {
+			return "";
+		}
+
+		const minSamples = this.numberOrNull(this.config.model.autoCorrectionMinSamples, 2);
+		const minSeasonalSamples = this.numberOrNull(this.config.model.autoCorrectionMinSeasonalSamples, 3);
+		const rolling = this.modelCorrection.rolling && this.modelCorrection.rolling.general;
+		const monthKey = this.extractMonthKey(new Date());
+		const seasonalMonth = this.modelCorrection.seasonalByMonth && this.modelCorrection.seasonalByMonth[monthKey];
+		const parts = [];
+
+		if (seasonalMonth && Number(seasonalMonth.general && seasonalMonth.general.sampleCount) >= minSeasonalSamples) {
+			const seasonalBias = this.roundNumber(seasonalMonth.general.biasF, 2);
+			if (seasonalBias !== null && Math.abs(seasonalBias) >= 0.2) {
+				parts.push(`seasonal ${seasonalBias > 0 ? "+" : ""}${seasonalBias}F`);
+			}
+		}
+
+		if (rolling && Number(rolling.sampleCount) >= minSamples) {
+			const seasonalBias = this.numberOrNull(seasonalMonth && seasonalMonth.general && seasonalMonth.general.biasF, 0);
+			const rollingBias = this.numberOrNull(rolling.biasF, 0);
+			const rollingResidual = this.roundNumber(rollingBias - seasonalBias, 2);
+			if (rollingResidual !== null && Math.abs(rollingResidual) >= 0.2) {
+				parts.push(`rolling ${rollingResidual > 0 ? "+" : ""}${rollingResidual}F`);
+			}
+		}
+
+		return parts.length > 0 ? `auto correction ${parts.join(", ")}` : "";
 	},
 
 	broadcastCalendarEvents () {
@@ -768,9 +868,7 @@ Module.register("MMM-PoolTemp", {
 
 		const summarySource = document.createElement("div");
 		summarySource.className = "mmm-pooltemp-source";
-		summarySource.textContent = this.config.temperatureSource === "smartthings" && this.sensorWaterTempF !== null
-			? (this.isSensorReadingStale() ? "Sensor stale, manual fallback" : "Sensor anchored")
-			: "Manual anchored";
+		summarySource.textContent = this.describeWaterTempSource();
 		summary.appendChild(summarySource);
 
 		const days = document.createElement("div");
@@ -882,5 +980,27 @@ Module.register("MMM-PoolTemp", {
 		}
 
 		return null;
+	},
+
+	describeWaterTempSource () {
+		const waterTempSource = this.resolveWaterTempSource();
+
+		if (waterTempSource === "smartthings") {
+			return "Sensor anchored";
+		}
+
+		if (waterTempSource === "smartthings-stale-hold") {
+			return "Sensor stale, holding last reading";
+		}
+
+		if (waterTempSource === "manual-fallback-stale-sensor") {
+			return "Sensor stale too long, manual fallback";
+		}
+
+		if (waterTempSource === "manual-fallback-no-sensor") {
+			return "No sensor reading yet, manual fallback";
+		}
+
+		return "Manual anchored";
 	}
 });

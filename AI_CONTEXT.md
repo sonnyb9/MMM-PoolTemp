@@ -17,8 +17,8 @@
 ## Current environment assumptions
 
 - User has dual MagicMirror instances
-- `magicmirror-server` uses `config.js`
-- `MagicMirror-TV` uses `config-tv.js`
+- `mm` uses `config.js`
+- `mm-tv` uses `config-tv.js`
 - Shared local weather is already handled through `MMM-SharedWeather`
 - Current local pool details:
   - About 10,000 gallons
