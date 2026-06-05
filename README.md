@@ -255,7 +255,7 @@ Example:
 
 The manual values remain useful as fallback calibration, but the live SmartThings sensor becomes the active temperature anchor when present.
 
-When SmartThings temperature timestamps are available through `MMM-STStatus`, `MMM-PoolTemp` keeps using the last successful sensor reading after it first goes stale, then falls back to `manualWaterTempF` only after a longer grace window. The default grace window is `staleSensorFallbackHours: 48`, while the primary freshness cutoff remains `sensorStaleHours`.
+When SmartThings temperature timestamps are available through `MMM-STStatus`, `MMM-PoolTemp` keeps using the last successful sensor reading even after it goes stale instead of dropping back to an older manual anchor. The TV card explicitly shows `Stale data` while it is holding the last known sensor value. `manualWaterTempF` is only used when SmartThings is configured but no sensor reading has been received yet.
 
 The model can also apply an automatic hybrid correction layer backed by the local pool-model SQLite history:
 

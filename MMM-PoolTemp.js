@@ -62,6 +62,8 @@ Module.register("MMM-PoolTemp", {
 		this.sensorWaterTempF = null;
 		this.sensorAmbientAirTempF = null;
 		this.sensorLastUpdatedAt = null;
+		this.lastGoodSensorWaterTempF = null;
+		this.lastGoodSensorUpdatedAt = null;
 		this.activeWaterTempF = this.config.manualWaterTempF;
 		this.lastPersistDigest = "";
 		this.modelCorrection = null;
@@ -149,6 +151,8 @@ Module.register("MMM-PoolTemp", {
 
 		this.sensorWaterTempF = nextTemp;
 		this.sensorLastUpdatedAt = sensorTimestamp;
+		this.lastGoodSensorWaterTempF = nextTemp;
+		this.lastGoodSensorUpdatedAt = sensorTimestamp instanceof Date ? sensorTimestamp : new Date();
 		this.sensorAmbientAirTempF = this.numberOrNull(
 			device.ambientTemperature,
 			device.airTemperature,
@@ -202,9 +206,13 @@ Module.register("MMM-PoolTemp", {
 	},
 
 	resolveWaterTempF () {
-		if (this.config.temperatureSource === "smartthings" && this.sensorWaterTempF !== null) {
-			if (!this.isSensorReadingStale() || this.isSensorReadingWithinFallbackWindow()) {
+		if (this.config.temperatureSource === "smartthings") {
+			if (this.sensorWaterTempF !== null && !this.isSensorReadingStale()) {
 				return this.sensorWaterTempF;
+			}
+
+			if (this.lastGoodSensorWaterTempF !== null) {
+				return this.lastGoodSensorWaterTempF;
 			}
 		}
 
@@ -871,6 +879,13 @@ Module.register("MMM-PoolTemp", {
 		summarySource.textContent = this.describeWaterTempSource();
 		summary.appendChild(summarySource);
 
+		if (this.isDisplayingStaleSensorData()) {
+			const staleWarning = document.createElement("div");
+			staleWarning.className = "mmm-pooltemp-alert";
+			staleWarning.textContent = "Stale data";
+			summary.appendChild(staleWarning);
+		}
+
 		const days = document.createElement("div");
 		days.className = "mmm-pooltemp-days";
 		card.appendChild(days);
@@ -982,6 +997,10 @@ Module.register("MMM-PoolTemp", {
 		return null;
 	},
 
+	isDisplayingStaleSensorData () {
+		return this.resolveWaterTempSource() === "smartthings-stale-hold";
+	},
+
 	describeWaterTempSource () {
 		const waterTempSource = this.resolveWaterTempSource();
 
@@ -991,10 +1010,6 @@ Module.register("MMM-PoolTemp", {
 
 		if (waterTempSource === "smartthings-stale-hold") {
 			return "Sensor stale, holding last reading";
-		}
-
-		if (waterTempSource === "manual-fallback-stale-sensor") {
-			return "Sensor stale too long, manual fallback";
 		}
 
 		if (waterTempSource === "manual-fallback-no-sensor") {
