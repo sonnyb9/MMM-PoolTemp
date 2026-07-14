@@ -56,8 +56,17 @@ The predictor is intentionally simple. It uses:
 - Forecast precipitation probability
 - Broad weather type and sun exposure
 - Pool profile assumptions like cover, enclosure, shell color, and full sun
+- Learned same-day correction by local capture hour from the local pool-model history
 
 It is meant to be directionally useful, not physically exact.
+
+## Same-day forecast behavior
+
+The module intentionally separates the current measured pool temperature from the forecast for today. The card still shows the live sensor/manual value as the current pool temperature, but calendar mode uses the corrected forecast high for today's all-day event. This avoids early-morning calendar forecasts that simply mirror the coldest part of the day.
+
+The adaptive feedback helper now returns same-day correction buckets keyed by local hour. By default it uses the last 45 days of local model history and applies a same-day correction only when at least 20 comparable samples exist for the current hour. This improves morning and midday forecasts without adding any weather API traffic.
+
+Hourly weather data would be a useful future enhancement, but this implementation deliberately does not add a new hourly API request. If hourly data is added later, prefer a once-daily cached fetch through the shared weather path so provider throttling risk remains bounded.
 
 ## Installation
 
@@ -85,6 +94,7 @@ If you have a local ambient reading near the pool, include it. That helps the da
     displayMode: "card",
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
+    timeZone: "America/New_York",
     temperatureSource: "manual",
     manualWaterTempF: 79.3,
     manualAmbientAirTempF: 86.6,
@@ -107,6 +117,7 @@ Use `displayMode: "calendar"` so the module does not render a visible card and o
     displayMode: "calendar",
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
+    timeZone: "America/New_York",
     temperatureSource: "manual",
     manualWaterTempF: 79.3,
     manualAmbientAirTempF: 86.6,

@@ -48,6 +48,10 @@ The module is intentionally frontend-only for v1.
 
 The predictor now also supports a hotter local-air input when the pool microclimate runs warmer than the general weather feed. That can come from `manualAmbientAirTempF` in config or from a future sensor payload.
 
+As of 2026-07-10, the predictor also uses local model history to correct same-day forecasts by capture hour. This was added because morning calendar forecasts were tracking the live early-morning sensor value too closely. Calendar mode now displays today's corrected forecast high while the card still shows the live pool temperature separately.
+
+Hourly weather data is a sensible future improvement, but it should be added through the shared weather path with bounded/cached provider calls. Do not add direct hourly API traffic from this module.
+
 ## Future SmartThings path
 
 The user asked whether Samsung API polling is already continuous. The answer was yes: `MMM-STStatus` currently polls while MagicMirror is running. Because of that, the preferred future sensor design is to reuse that existing polling path instead of adding new pool-specific Samsung API calls.
@@ -71,6 +75,7 @@ Check these first:
 4. Is the module still intended to stay frontend-only?
 5. Is the pool still uncovered and unheated?
 6. Has a SmartThings or Zigbee pool sensor been added since the last pass?
+7. Does the weather provider expose hourly data through the shared weather cache without increasing provider throttling risk?
 
 ## Likely next improvements
 
@@ -78,5 +83,6 @@ Check these first:
 - Promote local ambient air from manual config to sensor-fed ambient input
 - Add optional stale-sensor fallback logic
 - Add explicit calibration knobs if the heuristic consistently overshoots or undershoots
+- Add shared/cached hourly weather input once the upstream provider polling strategy is reviewed
 - Optionally persist the most recent computed prediction locally if startup latency becomes annoying
 - Add unit tests for the predictor if the model grows beyond the current simple heuristic
