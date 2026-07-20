@@ -74,7 +74,24 @@ Set `hourlyForecastMode` to one of:
 - `observe`: calculate and persist a bounded same-day hourly candidate without changing the displayed prediction
 - `active`: apply the bounded candidate when at least `hourlyMinRemainingHours` usable hours remain
 
-The default is `off`. The recommended rollout starts with `observe`, compares candidates with subsequent sensor observations, and enables `active` only after the comparison is favorable. Daily forecast inputs remain the fallback whenever hourly coverage is insufficient. `hourlyAdjustmentClampF` bounds the candidate's low, mean, and high changes relative to the daily baseline.
+The default is `off`. The recommended rollout starts with `observe`, compares candidates with subsequent sensor observations, and enables `active` only after the comparison is favorable. Daily forecast inputs remain the fallback whenever hourly coverage is insufficient.
+
+The v2 observation candidate compares the remaining-hour maximum and mean air temperatures with their daily forecast equivalents. It applies one weighted delta to the intact, already-corrected daily pool range, so it preserves the range shape and does not run the same-day learned correction a second time. The persisted observation includes the daily/hourly inputs, component weights, raw pre-clamp deltas, applied deltas, and clamp flags. `hourlyAdjustmentClampF` remains the final safety bound.
+
+The default v2 weights are:
+
+- `hourlyMaxAirDeltaWeight: 0.45`
+- `hourlyMeanAirDeltaWeight: 0.10`
+
+Run the repeatable activation gate after at least seven complete observation days:
+
+```bash
+python3 tools/hourly_activation_gate.py \
+  --start-date 2026-07-21 \
+  --end-date 2026-07-27
+```
+
+The analyzer deduplicates high-frequency runs by target date and local capture hour, uses the daily sensor maximum as actual, and reports overall, time-period, and per-day comparisons. Keep `observe` unless the complete-day candidate meaningfully reduces MAE, wins more cells than it loses, does not materially increase maximum error, and shows substantially less clamp saturation.
 
 ## Installation
 

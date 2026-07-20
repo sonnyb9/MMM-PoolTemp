@@ -93,6 +93,73 @@ assert.equal(bounded.lowF, 76.5);
 assert.equal(bounded.meanF, 81.5);
 assert.equal(bounded.highF, 83.5);
 
+const deltaSubject = makeModule({
+	hourlyForecastMode: "observe",
+	weatherTemperatureUnit: "fahrenheit",
+	hourlyMaxAirDeltaWeight: 0.45,
+	hourlyMeanAirDeltaWeight: 0.10
+});
+deltaSubject.summarizeRemainingHourlyForecast = () => ({
+	date: "2026-07-14",
+	hourCount: 6,
+	firstHour: "2026-07-14T14:00:00.000Z",
+	lastHour: "2026-07-14T19:00:00.000Z",
+	minTemperature: 82,
+	maxTemperature: 88,
+	meanTemperature: 85,
+	meanPrecipitationProbability: 10,
+	dominantWeatherType: "clearsky-day"
+});
+const deltaBaseline = {
+	date: "2026-07-14",
+	label: "Today",
+	lowF: 78,
+	meanF: 80,
+	highF: 82,
+	minAirF: 75,
+	maxAirF: 90
+};
+const negativeDelta = deltaSubject.buildHourlyObservation({
+	date: "2026-07-14",
+	minTemperature: 75,
+	maxTemperature: 90,
+	precipitationProbability: 20
+}, deltaBaseline);
+assert.equal(negativeDelta.adjustment.components.maxAirDeltaF, -2);
+assert.equal(negativeDelta.adjustment.components.meanAirDeltaF, 2.5);
+assert.equal(negativeDelta.adjustment.rawHighDeltaF, -0.65);
+assert.equal(negativeDelta.adjustment.appliedHighDeltaF, -0.65);
+assert.equal(negativeDelta.adjustment.highWasClamped, false);
+assert.equal(negativeDelta.candidate.highF, 81.35);
+
+deltaSubject.summarizeRemainingHourlyForecast = () => ({
+	date: "2026-07-14",
+	hourCount: 4,
+	firstHour: "2026-07-14T14:00:00.000Z",
+	lastHour: "2026-07-14T17:00:00.000Z",
+	minTemperature: 90,
+	maxTemperature: 96,
+	meanTemperature: 94,
+	meanPrecipitationProbability: 0,
+	dominantWeatherType: "clearsky-day"
+});
+const positiveDelta = deltaSubject.buildHourlyObservation({
+	date: "2026-07-14",
+	minTemperature: 75,
+	maxTemperature: 90,
+	precipitationProbability: 20
+}, deltaBaseline);
+assert.equal(positiveDelta.adjustment.rawHighDeltaF, 3.85);
+assert.equal(positiveDelta.adjustment.appliedHighDeltaF, 1.5);
+assert.equal(positiveDelta.adjustment.highWasClamped, true);
+assert.equal(positiveDelta.candidate.highF, 83.5);
+assert.deepEqual(JSON.parse(JSON.stringify(positiveDelta.adjustment.daily)), {
+	minAirF: 75,
+	maxAirF: 90,
+	meanAirF: 82.5,
+	precipitationProbability: 20
+});
+
 assert.equal(makeModule({ hourlyForecastMode: "observe" }).getHourlyForecastMode(), "observe");
 assert.equal(makeModule({ hourlyForecastMode: "active" }).getHourlyForecastMode(), "active");
 assert.equal(makeModule({ hourlyForecastMode: "invalid" }).getHourlyForecastMode(), "off");

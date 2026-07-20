@@ -52,6 +52,8 @@ As of 2026-07-10, the predictor also uses local model history to correct same-da
 
 As of 2026-07-14, the module supports shared hourly weather in `off`, `observe`, and `active` modes. The initial deployment uses `observe`: it records a bounded same-day hourly candidate but does not change the display. Yr current, daily, and hourly data come from the same cached SharedWeather response. Do not add direct hourly API traffic from this module.
 
+The first observation gate on 2026-07-20 rejected activation because v1 behaved like a persistent upward adjustment and saturated its clamp frequently. The v2 candidate (`pooltemp-2026-07-20-hourly-delta-v2`) instead applies a conservative weighted difference between daily and remaining-hour air forecasts to the completed daily pool baseline. It persists raw and bounded adjustment components for analysis and deliberately leaves the existing learned same-day correction unchanged. Keep both instances in `observe` until at least seven complete v2 days pass the automated gate in `tools/hourly_activation_gate.py`.
+
 ## Future SmartThings path
 
 The user asked whether Samsung API polling is already continuous. The answer was yes: `MMM-STStatus` currently polls while MagicMirror is running. Because of that, the preferred future sensor design is to reuse that existing polling path instead of adding new pool-specific Samsung API calls.
@@ -83,6 +85,6 @@ Check these first:
 - Promote local ambient air from manual config to sensor-fed ambient input
 - Add optional stale-sensor fallback logic
 - Add explicit calibration knobs if the heuristic consistently overshoots or undershoots
-- Review persisted hourly observation candidates after several warm-weather days, then decide whether to switch from `observe` to `active`
+- Review persisted v2 hourly observation candidates after at least seven complete days with `tools/hourly_activation_gate.py`, then decide whether to switch from `observe` to `active`
 - Optionally persist the most recent computed prediction locally if startup latency becomes annoying
 - Add unit tests for the predictor if the model grows beyond the current simple heuristic

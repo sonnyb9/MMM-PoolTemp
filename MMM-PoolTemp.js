@@ -13,6 +13,8 @@ Module.register("MMM-PoolTemp", {
 		hourlyForecastMode: "off",
 		hourlyMinRemainingHours: 3,
 		hourlyAdjustmentClampF: 1.5,
+		hourlyMaxAirDeltaWeight: 0.45,
+		hourlyMeanAirDeltaWeight: 0.10,
 		temperatureSource: "manual",
 		manualWaterTempF: 74.6,
 		manualAmbientAirTempF: null,
@@ -201,11 +203,7 @@ Module.register("MMM-PoolTemp", {
 				currentWeather: this.currentWeather
 			});
 			const hourlyObservation = index === 0
-				? this.buildHourlyObservation(forecast, baselinePrediction, {
-					previousMeanF: rollingMeanF,
-					recentRangeF,
-					currentWeather: this.currentWeather
-				})
+				? this.buildHourlyObservation(forecast, baselinePrediction)
 				: null;
 			const prediction = hourlyObservation && hourlyObservation.applied
 				? { ...hourlyObservation.candidate }
@@ -396,7 +394,7 @@ Module.register("MMM-PoolTemp", {
 		return ["off", "observe", "active"].includes(mode) ? mode : "off";
 	},
 
-	buildHourlyObservation (forecast, baselinePrediction, inputs) {
+	buildHourlyObservation (forecast, baselinePrediction) {
 		const mode = this.getHourlyForecastMode();
 		if (mode === "off") {
 			return null;
@@ -411,32 +409,76 @@ Module.register("MMM-PoolTemp", {
 			};
 		}
 
-		const candidateForecast = {
-			...forecast,
-			minTemperature: summary.minTemperature,
-			maxTemperature: summary.maxTemperature,
-			meanTemperature: summary.meanTemperature,
-			precipitationProbability: summary.meanPrecipitationProbability,
-			weatherType: summary.dominantWeatherType || forecast.weatherType
+		const dailyMinAirF = this.numberOrNull(
+			this.normalizeWeatherTemperature(forecast && forecast.minTemperature),
+			baselinePrediction.minAirF
+		);
+		const dailyMaxAirF = this.numberOrNull(
+			this.normalizeWeatherTemperature(forecast && forecast.maxTemperature),
+			baselinePrediction.maxAirF
+		);
+		const dailyMeanAirF = (dailyMinAirF + dailyMaxAirF) / 2;
+		const dailyPrecipitationProbability = this.numberOrNull(
+			forecast && forecast.precipitationProbability,
+			0
+		);
+		const maxAirDeltaF = summary.maxTemperature - dailyMaxAirF;
+		const meanAirDeltaF = summary.meanTemperature - dailyMeanAirF;
+		const maxWeight = this.numberOrNull(this.config.hourlyMaxAirDeltaWeight, 0.45);
+		const meanWeight = this.numberOrNull(this.config.hourlyMeanAirDeltaWeight, 0.10);
+		const rawHighDeltaF = (maxAirDeltaF * maxWeight) + (meanAirDeltaF * meanWeight);
+		const rawMeanDeltaF = rawHighDeltaF;
+		const rawLowDeltaF = rawHighDeltaF;
+		const adjustment = {
+			daily: {
+				minAirF: this.roundNumber(dailyMinAirF, 3),
+				maxAirF: this.roundNumber(dailyMaxAirF, 3),
+				meanAirF: this.roundNumber(dailyMeanAirF, 3),
+				precipitationProbability: this.roundNumber(dailyPrecipitationProbability, 3)
+			},
+			hourly: {
+				minAirF: summary.minTemperature,
+				maxAirF: summary.maxTemperature,
+				meanAirF: summary.meanTemperature,
+				precipitationProbability: summary.meanPrecipitationProbability
+			},
+			components: {
+				maxAirDeltaF: this.roundNumber(maxAirDeltaF, 3),
+				meanAirDeltaF: this.roundNumber(meanAirDeltaF, 3),
+				maxAirDeltaWeight: maxWeight,
+				meanAirDeltaWeight: meanWeight
+			},
+			rawLowDeltaF: this.roundNumber(rawLowDeltaF, 3),
+			rawMeanDeltaF: this.roundNumber(rawMeanDeltaF, 3),
+			rawHighDeltaF: this.roundNumber(rawHighDeltaF, 3)
 		};
-		const rawCandidate = this.predictDay({
-			previousMeanF: inputs.previousMeanF,
-			forecast: candidateForecast,
-			recentRangeF: inputs.recentRangeF,
-			dayIndex: 0,
-			currentWeather: inputs.currentWeather
-		});
-		const candidate = this.boundHourlyCandidate(baselinePrediction, rawCandidate);
+		const candidate = this.applyHourlyDeltaCandidate(baselinePrediction, adjustment);
+		adjustment.appliedLowDeltaF = this.roundNumber(candidate.lowF - baselinePrediction.lowF, 3);
+		adjustment.appliedMeanDeltaF = this.roundNumber(candidate.meanF - baselinePrediction.meanF, 3);
+		adjustment.appliedHighDeltaF = this.roundNumber(candidate.highF - baselinePrediction.highF, 3);
+		adjustment.lowWasClamped = Math.abs(adjustment.appliedLowDeltaF - adjustment.rawLowDeltaF) > 0.001;
+		adjustment.meanWasClamped = Math.abs(adjustment.appliedMeanDeltaF - adjustment.rawMeanDeltaF) > 0.001;
+		adjustment.highWasClamped = Math.abs(adjustment.appliedHighDeltaF - adjustment.rawHighDeltaF) > 0.001;
 
 		return {
 			mode,
 			applied: mode === "active",
 			reason: mode === "active" ? "hourly-active" : "hourly-observe",
 			summary,
+			adjustment,
 			candidate,
 			deltaHighF: this.roundNumber(candidate.highF - baselinePrediction.highF, 3),
 			deltaMeanF: this.roundNumber(candidate.meanF - baselinePrediction.meanF, 3)
 		};
+	},
+
+	applyHourlyDeltaCandidate (baseline, adjustment) {
+		return this.boundHourlyCandidate(baseline, {
+			...baseline,
+			lowF: baseline.lowF + adjustment.rawLowDeltaF,
+			meanF: baseline.meanF + adjustment.rawMeanDeltaF,
+			highF: baseline.highF + adjustment.rawHighDeltaF
+		});
 	},
 
 	summarizeRemainingHourlyForecast (forecastDate, now) {
@@ -821,7 +863,7 @@ Module.register("MMM-PoolTemp", {
 			const waterTempSource = this.resolveWaterTempSource();
 			const payload = {
 				capturedAt,
-				modelVersion: "pooltemp-2026-07-14-hourly-observation-v1",
+				modelVersion: "pooltemp-2026-07-20-hourly-delta-v2",
 			displayMode: this.config.displayMode,
 			weatherLocationName: this.config.weatherLocationName,
 			hourlyForecastMode: this.getHourlyForecastMode(),
