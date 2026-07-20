@@ -6,6 +6,7 @@
     displayMode: "card",
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
+    hourlyForecastMode: "observe",
     temperatureSource: "manual",
     manualWaterTempF: 79.3,
     manualAmbientAirTempF: 86.6,

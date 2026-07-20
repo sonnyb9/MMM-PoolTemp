@@ -7,10 +7,13 @@ Module.register("MMM-PoolTemp", {
 		calendarDays: 5,
 		weatherNotification: "POOLTEMP_WEATHER_DATA",
 			sensorNotification: "STSTATUS_DEVICE_DATA",
-			weatherLocationName: "Lutz",
-			weatherTemperatureUnit: "auto",
-			timeZone: "America/New_York",
-			temperatureSource: "manual",
+		weatherLocationName: "Lutz",
+		weatherTemperatureUnit: "auto",
+		timeZone: "America/New_York",
+		hourlyForecastMode: "off",
+		hourlyMinRemainingHours: 3,
+		hourlyAdjustmentClampF: 1.5,
+		temperatureSource: "manual",
 		manualWaterTempF: 74.6,
 		manualAmbientAirTempF: null,
 		manualObservedLowF: 74.6,
@@ -60,6 +63,7 @@ Module.register("MMM-PoolTemp", {
 	start () {
 		this.currentWeather = null;
 		this.forecastArray = [];
+		this.hourlyArray = [];
 		this.predictions = [];
 		this.lastWeatherAt = null;
 		this.lastCalendarDigest = "";
@@ -120,6 +124,10 @@ Module.register("MMM-PoolTemp", {
 
 		if ((type === "forecast" || type === "daily") && Array.isArray(payload.data)) {
 			this.forecastArray = payload.data.slice();
+		}
+
+		if (type === "hourly" && Array.isArray(payload.data)) {
+			this.hourlyArray = payload.data.slice();
 		}
 
 		this.lastWeatherAt = new Date();
@@ -185,13 +193,25 @@ Module.register("MMM-PoolTemp", {
 		const predictions = [];
 
 		for (const [index, forecast] of this.forecastArray.slice(0, this.config.calendarDays).entries()) {
-			const prediction = this.predictDay({
+			const baselinePrediction = this.predictDay({
 				previousMeanF: rollingMeanF,
 				forecast,
 				recentRangeF,
 				dayIndex: index,
 				currentWeather: this.currentWeather
 			});
+			const hourlyObservation = index === 0
+				? this.buildHourlyObservation(forecast, baselinePrediction, {
+					previousMeanF: rollingMeanF,
+					recentRangeF,
+					currentWeather: this.currentWeather
+				})
+				: null;
+			const prediction = hourlyObservation && hourlyObservation.applied
+				? { ...hourlyObservation.candidate }
+				: baselinePrediction;
+
+			prediction.hourlyObservation = hourlyObservation;
 
 			predictions.push(prediction);
 			rollingMeanF = prediction.meanF;
@@ -252,7 +272,10 @@ Module.register("MMM-PoolTemp", {
 			minAirF,
 			previousMeanF
 		);
-			const meanAirF = (minAirF + maxAirF) / 2;
+			const meanAirF = this.numberOrNull(
+				this.normalizeWeatherTemperature(forecast.meanTemperature),
+				(minAirF + maxAirF) / 2
+			);
 			const precipProbability = this.numberOrNull(forecast.precipitationProbability, 0);
 			const weatherType = String(forecast.weatherType || "");
 			const now = new Date();
@@ -367,6 +390,153 @@ Module.register("MMM-PoolTemp", {
 				sameDayCorrection
 			};
 		},
+
+	getHourlyForecastMode () {
+		const mode = String(this.config.hourlyForecastMode || "off").toLowerCase();
+		return ["off", "observe", "active"].includes(mode) ? mode : "off";
+	},
+
+	buildHourlyObservation (forecast, baselinePrediction, inputs) {
+		const mode = this.getHourlyForecastMode();
+		if (mode === "off") {
+			return null;
+		}
+
+		const summary = this.summarizeRemainingHourlyForecast(forecast && forecast.date, new Date());
+		if (!summary) {
+			return {
+				mode,
+				applied: false,
+				reason: "insufficient-hourly-coverage"
+			};
+		}
+
+		const candidateForecast = {
+			...forecast,
+			minTemperature: summary.minTemperature,
+			maxTemperature: summary.maxTemperature,
+			meanTemperature: summary.meanTemperature,
+			precipitationProbability: summary.meanPrecipitationProbability,
+			weatherType: summary.dominantWeatherType || forecast.weatherType
+		};
+		const rawCandidate = this.predictDay({
+			previousMeanF: inputs.previousMeanF,
+			forecast: candidateForecast,
+			recentRangeF: inputs.recentRangeF,
+			dayIndex: 0,
+			currentWeather: inputs.currentWeather
+		});
+		const candidate = this.boundHourlyCandidate(baselinePrediction, rawCandidate);
+
+		return {
+			mode,
+			applied: mode === "active",
+			reason: mode === "active" ? "hourly-active" : "hourly-observe",
+			summary,
+			candidate,
+			deltaHighF: this.roundNumber(candidate.highF - baselinePrediction.highF, 3),
+			deltaMeanF: this.roundNumber(candidate.meanF - baselinePrediction.meanF, 3)
+		};
+	},
+
+	summarizeRemainingHourlyForecast (forecastDate, now) {
+		if (!Array.isArray(this.hourlyArray) || this.hourlyArray.length === 0) {
+			return null;
+		}
+
+		const targetDate = this.getForecastDateKey(forecastDate);
+		const parsedNow = new Date(now);
+		const currentHour = new Date(Math.floor(parsedNow.getTime() / (60 * 60 * 1000)) * (60 * 60 * 1000));
+		const entries = this.hourlyArray.map((entry) => ({
+			entry,
+			date: this.parseTimestamp(entry && entry.date)
+		})).filter(({ entry, date }) => date &&
+			date >= currentHour &&
+			this.getLocalDateKey(date) === targetDate &&
+			this.normalizeWeatherTemperature(entry.temperature) !== null);
+		const minHours = Math.max(1, this.numberOrNull(this.config.hourlyMinRemainingHours, 3));
+		if (entries.length < minHours) {
+			return null;
+		}
+
+		const temperatures = entries.map(({ entry }) => this.normalizeWeatherTemperature(entry.temperature));
+		const precipitation = entries
+			.map(({ entry }) => this.numberOrNull(entry.precipitationProbability))
+			.filter((value) => value !== null);
+		const weatherCounts = entries.reduce((counts, { entry }) => {
+			const weatherType = String(entry.weatherType || "");
+			if (weatherType) {
+				counts[weatherType] = (counts[weatherType] || 0) + 1;
+			}
+			return counts;
+		}, {});
+		const dominantWeatherType = Object.entries(weatherCounts)
+			.sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+
+		return {
+			date: targetDate,
+			hourCount: entries.length,
+			firstHour: entries[0].date.toISOString(),
+			lastHour: entries[entries.length - 1].date.toISOString(),
+			minTemperature: this.roundNumber(Math.min(...temperatures), 3),
+			maxTemperature: this.roundNumber(Math.max(...temperatures), 3),
+			meanTemperature: this.roundNumber(
+				temperatures.reduce((sum, value) => sum + value, 0) / temperatures.length,
+				3
+			),
+			meanPrecipitationProbability: precipitation.length > 0
+				? this.roundNumber(precipitation.reduce((sum, value) => sum + value, 0) / precipitation.length, 3)
+				: 0,
+			dominantWeatherType
+		};
+	},
+
+	boundHourlyCandidate (baseline, candidate) {
+		const maxAdjustmentF = Math.max(0, this.numberOrNull(this.config.hourlyAdjustmentClampF, 1.5));
+		const bounded = {
+			...candidate,
+			lowF: this.clamp(candidate.lowF, baseline.lowF - maxAdjustmentF, baseline.lowF + maxAdjustmentF),
+			meanF: this.clamp(candidate.meanF, baseline.meanF - maxAdjustmentF, baseline.meanF + maxAdjustmentF),
+			highF: this.clamp(candidate.highF, baseline.highF - maxAdjustmentF, baseline.highF + maxAdjustmentF)
+		};
+		const normalized = this.normalizePredictionRange(bounded.lowF, bounded.meanF, bounded.highF);
+		Object.assign(bounded, normalized, {
+			poolTempF: Math.round(normalized.meanF),
+			poolRangeLowF: Math.round(normalized.lowF),
+			poolRangeHighF: Math.round(normalized.highF),
+			poolRangeHighDisplayF: Math.max(normalized.highF, this.activeWaterTempF)
+		});
+		return bounded;
+	},
+
+	getForecastDateKey (value) {
+		if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+			return value.slice(0, 10);
+		}
+		return this.getLocalDateKey(value);
+	},
+
+	getLocalDateKey (value) {
+		const date = value instanceof Date ? value : new Date(value);
+		if (Number.isNaN(date.getTime())) {
+			return null;
+		}
+
+		try {
+			const parts = new Intl.DateTimeFormat("en-US", {
+				year: "numeric",
+				month: "2-digit",
+				day: "2-digit",
+				timeZone: this.resolveTimeZone()
+			}).formatToParts(date).reduce((result, part) => {
+				result[part.type] = part.value;
+				return result;
+			}, {});
+			return `${parts.year}-${parts.month}-${parts.day}`;
+		} catch (error) {
+			return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+		}
+	},
 
 	isSensorReadingStale () {
 		if (!(this.sensorLastUpdatedAt instanceof Date) || Number.isNaN(this.sensorLastUpdatedAt.getTime())) {
@@ -651,9 +821,10 @@ Module.register("MMM-PoolTemp", {
 			const waterTempSource = this.resolveWaterTempSource();
 			const payload = {
 				capturedAt,
-				modelVersion: "pooltemp-2026-07-10-sameday-hour-bias",
+				modelVersion: "pooltemp-2026-07-14-hourly-observation-v1",
 			displayMode: this.config.displayMode,
 			weatherLocationName: this.config.weatherLocationName,
+			hourlyForecastMode: this.getHourlyForecastMode(),
 			waterTempSource,
 			anchorWaterTempF: this.roundNumber(baseWaterTempF, 3),
 			activeWaterTempF: this.roundNumber(this.activeWaterTempF, 3),
@@ -673,6 +844,7 @@ Module.register("MMM-PoolTemp", {
 			},
 			currentWeather: this.summarizeCurrentWeather(),
 			forecastDigest: this.summarizeForecastDigest(),
+			hourlyForecastDigest: this.summarizeHourlyForecastDigest(),
 			inputDigest: this.buildInputDigest(baseWaterTempF, recentRangeF, sensorTrend, predictions),
 			notes: this.buildModelRunNotes(waterTempSource, sensorTrend),
 			predictions: predictions.map((prediction) => ({
@@ -686,7 +858,8 @@ Module.register("MMM-PoolTemp", {
 					minAirF: prediction.minAirF,
 					precipProbability: prediction.precipProbability,
 					weatherType: prediction.weatherType,
-					sameDayCorrection: prediction.sameDayCorrection || null
+					sameDayCorrection: prediction.sameDayCorrection || null,
+					hourlyObservation: prediction.hourlyObservation || null
 				}))
 			};
 
@@ -741,6 +914,24 @@ Module.register("MMM-PoolTemp", {
 		}));
 	},
 
+	summarizeHourlyForecastDigest () {
+		if (!Array.isArray(this.hourlyArray) || this.hourlyArray.length === 0) {
+			return {};
+		}
+
+		const datedEntries = this.hourlyArray
+			.map((hour) => this.parseTimestamp(hour && hour.date))
+			.filter((date) => date !== null);
+		const firstDate = datedEntries[0] || null;
+		const lastDate = datedEntries[datedEntries.length - 1] || null;
+		return {
+			receivedCount: this.hourlyArray.length,
+			firstHour: firstDate ? firstDate.toISOString() : null,
+			lastHour: lastDate ? lastDate.toISOString() : null,
+			todayRemaining: this.summarizeRemainingHourlyForecast(new Date(), new Date())
+		};
+	},
+
 	summarizeAdaptiveCorrection () {
 		if (!this.modelCorrection || !this.config.model.autoCorrectionEnabled) {
 			return {};
@@ -772,13 +963,16 @@ Module.register("MMM-PoolTemp", {
 			sensorTrendHours: this.roundNumber(sensorTrend && sensorTrend.hours, 3),
 			currentWeather: this.summarizeCurrentWeather(),
 			forecastDigest: this.summarizeForecastDigest(),
+			hourlyForecastMode: this.getHourlyForecastMode(),
+			hourlyForecastDigest: this.summarizeHourlyForecastDigest(),
 			modelParams: { ...this.config.model },
 			predictionDigest: predictions.map((prediction) => ({
 					date: prediction.date,
 					meanF: this.roundNumber(prediction.meanF, 4),
 					lowF: this.roundNumber(prediction.lowF, 4),
 					highF: this.roundNumber(prediction.highF, 4),
-					sameDayCorrection: prediction.sameDayCorrection || null
+					sameDayCorrection: prediction.sameDayCorrection || null,
+					hourlyObservation: prediction.hourlyObservation || null
 				}))
 			};
 		},

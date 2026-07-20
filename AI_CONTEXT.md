@@ -44,13 +44,13 @@ The module is intentionally frontend-only for v1.
 - It stays resilient when network conditions are noisy
 - It is easy to upgrade later with a sensor-backed input
 
-`MMM-SharedWeather` already deduplicates upstream weather requests, but it does not directly expose its cached data to sibling modules. Because of that, this repo includes a small bridge patch so `MMM-SharedWeather` can emit local MagicMirror notifications carrying the already-fetched payload.
+`MMM-SharedWeather` deduplicates upstream weather requests and can rebroadcast its cached normalized payloads to sibling modules. This repo retains the original bridge patch for older SharedWeather installations.
 
 The predictor now also supports a hotter local-air input when the pool microclimate runs warmer than the general weather feed. That can come from `manualAmbientAirTempF` in config or from a future sensor payload.
 
 As of 2026-07-10, the predictor also uses local model history to correct same-day forecasts by capture hour. This was added because morning calendar forecasts were tracking the live early-morning sensor value too closely. Calendar mode now displays today's corrected forecast high while the card still shows the live pool temperature separately.
 
-Hourly weather data is a sensible future improvement, but it should be added through the shared weather path with bounded/cached provider calls. Do not add direct hourly API traffic from this module.
+As of 2026-07-14, the module supports shared hourly weather in `off`, `observe`, and `active` modes. The initial deployment uses `observe`: it records a bounded same-day hourly candidate but does not change the display. Yr current, daily, and hourly data come from the same cached SharedWeather response. Do not add direct hourly API traffic from this module.
 
 ## Future SmartThings path
 
@@ -83,6 +83,6 @@ Check these first:
 - Promote local ambient air from manual config to sensor-fed ambient input
 - Add optional stale-sensor fallback logic
 - Add explicit calibration knobs if the heuristic consistently overshoots or undershoots
-- Add shared/cached hourly weather input once the upstream provider polling strategy is reviewed
+- Review persisted hourly observation candidates after several warm-weather days, then decide whether to switch from `observe` to `active`
 - Optionally persist the most recent computed prediction locally if startup latency becomes annoying
 - Add unit tests for the predictor if the model grows beyond the current simple heuristic

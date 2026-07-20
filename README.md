@@ -66,7 +66,15 @@ The module intentionally separates the current measured pool temperature from th
 
 The adaptive feedback helper now returns same-day correction buckets keyed by local hour. By default it uses the last 45 days of local model history and applies a same-day correction only when at least 20 comparable samples exist for the current hour. This improves morning and midday forecasts without adding any weather API traffic.
 
-Hourly weather data would be a useful future enhancement, but this implementation deliberately does not add a new hourly API request. If hourly data is added later, prefer a once-daily cached fetch through the shared weather path so provider throttling risk remains bounded.
+Hourly weather can be consumed through `MMM-SharedWeather` without adding another upstream request. For Yr, current, daily, and hourly subscribers at the same location are generated from one cached Locationforecast timeseries response.
+
+Set `hourlyForecastMode` to one of:
+
+- `off`: ignore hourly payloads
+- `observe`: calculate and persist a bounded same-day hourly candidate without changing the displayed prediction
+- `active`: apply the bounded candidate when at least `hourlyMinRemainingHours` usable hours remain
+
+The default is `off`. The recommended rollout starts with `observe`, compares candidates with subsequent sensor observations, and enables `active` only after the comparison is favorable. Daily forecast inputs remain the fallback whenever hourly coverage is insufficient. `hourlyAdjustmentClampF` bounds the candidate's low, mean, and high changes relative to the daily baseline.
 
 ## Installation
 
@@ -95,6 +103,7 @@ If you have a local ambient reading near the pool, include it. That helps the da
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
     timeZone: "America/New_York",
+    hourlyForecastMode: "observe",
     temperatureSource: "manual",
     manualWaterTempF: 79.3,
     manualAmbientAirTempF: 86.6,
@@ -118,6 +127,7 @@ Use `displayMode: "calendar"` so the module does not render a visible card and o
     weatherNotification: "POOLTEMP_WEATHER_DATA",
     weatherLocationName: "Lutz",
     timeZone: "America/New_York",
+    hourlyForecastMode: "observe",
     temperatureSource: "manual",
     manualWaterTempF: 79.3,
     manualAmbientAirTempF: 86.6,
@@ -208,20 +218,21 @@ Important: `Pool Temp` must be included in `calendarSet` or CalendarExt3 will fi
 
 ## Required SharedWeather bridge
 
-The module does not pull from `MMM-SharedWeather` directly because that module does not natively rebroadcast its cached data to sibling modules. Use the included patch to add a small bridge notification.
+The module does not pull from a weather provider directly. It receives the normalized payloads that `MMM-SharedWeather` rebroadcasts from its cache. Older SharedWeather installations may require the included bridge patch.
 
-After patching `MMM-SharedWeather`, add `broadcastNotifications` to one local current-weather instance and one local forecast instance:
+Enable `broadcastNotifications` on the local current and forecast instances. To evaluate hourly forecasts, add one headless hourly subscriber using the same provider, coordinates, and update interval:
 
 ```js
 config: {
   weatherProvider: "yr",
+  type: "hourly",
   lat: 28.143189,
   lon: -82.54473,
   broadcastNotifications: ["POOLTEMP_WEATHER_DATA"]
 }
 ```
 
-You only need the Lutz instances to broadcast for this module.
+You only need the Lutz instances to broadcast for this module. With Yr, the hourly subscriber shares the existing location cache and does not start a second upstream fetch loop.
 
 ## SmartThings sensor input
 
@@ -293,4 +304,10 @@ Syntax check:
 
 ```bash
 npm run check
+```
+
+Behavior tests:
+
+```bash
+npm test
 ```
